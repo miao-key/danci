@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 
-import { findAdminByEmail, verifyPassword } from "@/lib/store";
+import { findAdminByEmailWithSecret } from "@/lib/admin-repo";
+import { verifyPassword } from "@/lib/password";
 import { setSessionCookie } from "@/lib/auth";
+import { MIN_PASSWORD_LENGTH } from "@/lib/constants";
 
 interface SigninBody {
   email?: unknown;
@@ -28,9 +30,17 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+  if (password.length < MIN_PASSWORD_LENGTH) {
+    return NextResponse.json(
+      {
+        error: `密码长度至少 ${MIN_PASSWORD_LENGTH} 位`,
+      },
+      { status: 400 },
+    );
+  }
 
-  const admin = findAdminByEmail(email);
-  if (!admin || !verifyPassword(admin, password)) {
+  const admin = await findAdminByEmailWithSecret(email);
+  if (!admin || !(await verifyPassword(password, admin.passwordHash))) {
     return NextResponse.json(
       { error: "邮箱或密码错误" },
       { status: 401 },

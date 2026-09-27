@@ -127,4 +127,11 @@
   html {
     @apply font-sans;
   }
+  /* 密码输入框：用等宽字体让 • 等距排列、加密字距避免过于拥挤 */
+  input[type="password"] {
+    font-family:
+      ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+      "Liberation Mono", monospace;
+    letter-spacing: 0.05em;
+  }
 }

@@ -1,24 +1,17 @@
-// 管理员账户的本地模拟数据层。
-// 后面接入 Supabase 时，把里面的实现替换为 supabase client 调用即可，
-// 暴露的方法签名（CRUD）保持不变即可最小化改动到上层。
+/**
+ * 本地数据层：仅保留 word_books 的 mock 实现（待迁移到 Drizzle）。
+ *
+ * 管理员相关的 CRUD 已迁移到 `@/lib/admin-repo`，此处不再导出。
+ * 这里保留旧的 `AdminRole` 类型只是为了兼容尚未改完的 UI 文件，
+ * 一旦 UI 全部迁完就删除。
+ */
 
 export type AdminRole = "super" | "normal";
-
-export interface AdminUser {
-  id: string;
-  name: string;
-  email: string;
-  // 仅用于本地 mock；正式接入后下掉。
-  password: string;
-  role: AdminRole;
-  createdAt: string;
-}
 
 export interface WordBook {
   id: string;
   name: string;
   description?: string;
-  // 示例封面 emoji/色标，便于 mock 数据展示。
   cover?: string;
   wordCount: number;
   createdAt: string;
@@ -29,27 +22,15 @@ export interface WordBook {
 const GLOBAL_KEY = "__danci_admin_seed__";
 
 type Seed = {
-  admins: AdminUser[];
   books: WordBook[];
 };
 
 const seed: Seed = (globalThis as Record<string, unknown>)[GLOBAL_KEY] as
   | Seed
-  | undefined
-  ??
+  | undefined ??
   (() => {
     const now = new Date().toISOString();
     const initial: Seed = {
-      admins: [
-        {
-          id: "admin-1",
-          name: "超级管理员",
-          email: "admin@example.com",
-          password: "admin123456",
-          role: "super",
-          createdAt: now,
-        },
-      ],
       books: [
         {
           id: "book-1",
@@ -88,62 +69,6 @@ function rid(prefix: string) {
   return `${prefix}-${Date.now().toString(36)}-${Math.random()
     .toString(36)
     .slice(2, 8)}`;
-}
-
-// ============== Admin ==============
-
-export function listAdmins(): Omit<AdminUser, "password">[] {
-  return seed.admins.map(({ password: _password, ...rest }) => {
-    void _password;
-    return rest;
-  });
-}
-
-export function findAdminByEmail(
-  email: string,
-): AdminUser | undefined {
-  return seed.admins.find(
-    (a) => a.email.toLowerCase() === email.toLowerCase(),
-  );
-}
-
-export function findAdminById(id: string): AdminUser | undefined {
-  return seed.admins.find((a) => a.id === id);
-}
-
-export function verifyPassword(
-  admin: AdminUser,
-  password: string,
-): boolean {
-  // Mock 阶段明文比较；接 Supabase 后使用 bcrypt / supabase auth。
-  return admin.password === password;
-}
-
-export interface CreateAdminInput {
-  name: string;
-  email: string;
-  password: string;
-  role?: AdminRole;
-}
-
-export function createAdmin(input: CreateAdminInput): AdminUser {
-  const admin: AdminUser = {
-    id: rid("admin"),
-    name: input.name,
-    email: input.email,
-    password: input.password,
-    role: input.role ?? "normal",
-    createdAt: new Date().toISOString(),
-  };
-  seed.admins.push(admin);
-  return admin;
-}
-
-export function deleteAdmin(id: string): boolean {
-  const idx = seed.admins.findIndex((a) => a.id === id);
-  if (idx === -1) return false;
-  seed.admins.splice(idx, 1);
-  return true;
 }
 
 // ============== WordBook ==============

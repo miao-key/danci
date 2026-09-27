@@ -1,19 +1,28 @@
 import { NextResponse } from "next/server";
 
-import { getSession } from "@/lib/auth";
 import {
+  countAdminsByRole,
   createAdmin,
   deleteAdmin,
   findAdminByEmail,
   listAdmins,
-} from "@/lib/store";
+} from "@/lib/admin-repo";
+import { requireSuper } from "@/lib/admin-guard";
+import { deleteSessionsByAdmin } from "@/lib/session-repo";
+import { MIN_PASSWORD_LENGTH } from "@/lib/constants";
+import type { AdminRole } from "@/db/schema";
 
+/**
+ * /api/admins
+ *
+ * - GET   ：列出全部管理员，仅 super 可调用
+ * - POST  ：新增管理员，仅 super 可调用；body 包含 name/email/password/role
+ * - DELETE：?id=xxx 删除管理员，仅 super 可调用，且不能删自己、不能删最后一位 super
+ */
 export async function GET() {
-  const session = await getSession();
-  if (!session) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
-  return NextResponse.json({ admins: listAdmins() });
+  const guard = await requireSuper();
+  if (!guard.ok) return guard.response;
+  return NextResponse.json({ admins: await listAdmins() });
 }
 
 interface CreateBody {
@@ -24,17 +33,14 @@ interface CreateBody {
 }
 
 export async function POST(request: Request) {
-  const session = await getSession();
-  if (!session) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
-  // 简化：现阶段任何已登录用户都能新增管理员。
-  // 后续接入 RBAC 时，仅 super 角色可操作。
+  const guard = await requireSuper();
+  if (!guard.ok) return guard.response;
+
   const body = (await request.json().catch(() => ({}))) as CreateBody;
   const name = typeof body.name === "string" ? body.name.trim() : "";
   const email = typeof body.email === "string" ? body.email.trim() : "";
   const password = typeof body.password === "string" ? body.password : "";
-  const role =
+  const role: AdminRole =
     body.role === "super" || body.role === "normal"
       ? body.role
       : "normal";
@@ -45,52 +51,66 @@ export async function POST(request: Request) {
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return NextResponse.json({ error: "邮箱格式不正确" }, { status: 400 });
   }
-  if (password.length < 6) {
+  if (password.length < MIN_PASSWORD_LENGTH) {
     return NextResponse.json(
-      { error: "密码长度至少 6 位" },
+      {
+        error: `密码长度至少 ${MIN_PASSWORD_LENGTH} 位`,
+      },
       { status: 400 },
     );
   }
-  if (findAdminByEmail(email)) {
+  if (await findAdminByEmail(email)) {
     return NextResponse.json(
       { error: "该邮箱已被注册" },
       { status: 409 },
     );
   }
 
-  const admin = createAdmin({ name, email, password, role });
-  return NextResponse.json({
-    admin: {
-      id: admin.id,
-      email: admin.email,
-      name: admin.name,
-      role: admin.role,
-      createdAt: admin.createdAt,
-    },
-  });
+  const admin = await createAdmin({ name, email, password, role });
+  return NextResponse.json({ admin });
 }
 
 export async function DELETE(request: Request) {
-  const session = await getSession();
-  if (!session) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+  const guard = await requireSuper();
+  if (!guard.ok) return guard.response;
+
   const id = new URL(request.url).searchParams.get("id");
   if (!id) {
     return NextResponse.json({ error: "缺少 id" }, { status: 400 });
   }
-  if (id === session.id) {
+  if (id === guard.session.id) {
     return NextResponse.json(
       { error: "不能删除自己" },
       { status: 400 },
     );
   }
-  const ok = deleteAdmin(id);
+  // 最后一位 super 保护
+  const target = await listAdmins();
+  const targetAdmin = target.find((a) => a.id === id);
+  if (!targetAdmin) {
+    return NextResponse.json(
+      { error: "管理员不存在" },
+      { status: 404 },
+    );
+  }
+  if (targetAdmin.role === "super") {
+    const superCount = await countAdminsByRole("super");
+    if (superCount <= 1) {
+      return NextResponse.json(
+        { error: "不能删除最后一位系统管理员" },
+        { status: 400 },
+      );
+    }
+  }
+
+  const ok = await deleteAdmin(id);
   if (!ok) {
     return NextResponse.json(
       { error: "管理员不存在" },
       { status: 404 },
     );
   }
+  // 删除账号时一并踢下线该账号的所有会话
+  await deleteSessionsByAdmin(id);
   return NextResponse.json({ ok: true });
 }

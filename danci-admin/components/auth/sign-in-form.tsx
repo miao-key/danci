@@ -23,8 +23,8 @@ export function SignInForm() {
   const search = useSearchParams();
   const nextPath = search.get("next") || "/books";
 
-  const [email, setEmail] = React.useState("admin@example.com");
-  const [password, setPassword] = React.useState("admin123456");
+  const [email, setEmail] = React.useState("");
+  const [password, setPassword] = React.useState("");
   const [showPassword, setShowPassword] = React.useState(false);
   const [loading, setLoading] = React.useState(false);
 
@@ -98,9 +98,10 @@ export function SignInForm() {
                   type={showPassword ? "text" : "password"}
                   autoComplete="current-password"
                   required
+                  minLength={8}
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  placeholder="请输入密码"
+                  placeholder="至少 8 位"
                   className={cn(
                     "h-10 flex-1 border-0 bg-transparent px-0 shadow-none focus-visible:ring-0 focus-visible:ring-offset-0"
                   )}

@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
 
-import {
-  createAdmin,
-  findAdminByEmail,
-} from "@/lib/store";
+import { countAdmins, createAdmin, findAdminByEmail } from "@/lib/admin-repo";
 import { setSessionCookie } from "@/lib/auth";
+import { MIN_PASSWORD_LENGTH } from "@/lib/constants";
 
 interface SignupBody {
   name?: unknown;
@@ -13,6 +11,13 @@ interface SignupBody {
   confirmPassword?: unknown;
 }
 
+/**
+ * /api/auth/signup
+ *
+ * 业务规则：
+ * - 仅当数据库中没有任何管理员时，才允许注册。第一个注册的账号自动获得 "super" 角色。
+ * - 只要数据库里已有管理员，本接口直接拒绝 403（前端也会做服务端守卫）。
+ */
 export async function POST(request: Request) {
   let body: SignupBody;
   try {
@@ -21,6 +26,14 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: "请求体格式错误" },
       { status: 400 },
+    );
+  }
+
+  const total = await countAdmins();
+  if (total > 0) {
+    return NextResponse.json(
+      { error: "已存在系统管理员，禁止再次注册" },
+      { status: 403 },
     );
   }
 
@@ -36,9 +49,11 @@ export async function POST(request: Request) {
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return NextResponse.json({ error: "邮箱格式不正确" }, { status: 400 });
   }
-  if (password.length < 6) {
+  if (password.length < MIN_PASSWORD_LENGTH) {
     return NextResponse.json(
-      { error: "密码长度至少 6 位" },
+      {
+        error: `密码长度至少 ${MIN_PASSWORD_LENGTH} 位`,
+      },
       { status: 400 },
     );
   }
@@ -48,14 +63,20 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  if (findAdminByEmail(email)) {
+  if (await findAdminByEmail(email)) {
     return NextResponse.json(
       { error: "该邮箱已被注册" },
       { status: 409 },
     );
   }
 
-  const admin = createAdmin({ name, email, password });
+  // 第一个管理员固定为 super
+  const admin = await createAdmin({
+    name,
+    email,
+    password,
+    role: "super",
+  });
 
   await setSessionCookie({
     id: admin.id,

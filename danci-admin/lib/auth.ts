@@ -1,19 +1,28 @@
-// 简单的服务端会话工具。
-// 在 mock 阶段：把 { id, email, role } 序列化后用 HMAC 签名写到 HttpOnly cookie。
-// 接 Supabase 后：直接换成 supabase.auth.getUser() / setSession() 即可。
+/**
+ * 服务端会话工具（DB-backed session）
+ *
+ * 流程：
+ *  1. 用户登录成功后，在 admin_session 表里插入一行（7 天过期），把 session.id 写入 HttpOnly cookie。
+ *  2. 每次请求通过 cookie 中的 sessionId 回查 DB：
+ *     - 会话不存在 / 已过期 → 返回 null（视为未登录）
+ *     - 会话有效 → 进一步回查 admin_users，确认管理员还存在且角色匹配，返回 SessionPayload
+ *
+ * 这样既保留了服务端可撤销、跨设备管理的特性，也避免把任何用户信息塞进 cookie。
+ *
+ * 注意：`AdminRole` 从 `@/db/schema` 重新导出，保持类型单一来源。
+ */
 import { cookies } from "next/headers";
-import { createHmac, timingSafeEqual } from "node:crypto";
 
-import { findAdminById, type AdminRole } from "@/lib/store";
+import { findAdminById } from "@/lib/admin-repo";
+import {
+  SESSION_TTL_MS,
+  createSession,
+  deleteSession,
+  findActiveSession,
+} from "@/lib/session-repo";
+import type { AdminRole } from "@/db/schema";
 
 export const AUTH_COOKIE = "danci_admin_session";
-// 7 天
-const COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
-
-// 这里是本地开发用的密钥；接 Supabase 之后用不到。
-// 注意：服务端会自动注入随机密钥到 env 里更安全。
-const SECRET =
-  process.env.AUTH_SECRET ?? "dev-only-danci-admin-secret-change-me";
 
 export interface SessionPayload {
   id: string;
@@ -22,88 +31,46 @@ export interface SessionPayload {
   role: AdminRole;
 }
 
-function b64url(buf: Buffer) {
-  return buf
-    .toString("base64")
-    .replace(/=+$/g, "")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_");
-}
-
-function fromB64url(s: string) {
-  s = s.replace(/-/g, "+").replace(/_/g, "/");
-  while (s.length % 4) s += "=";
-  return Buffer.from(s, "base64");
-}
-
-function sign(value: string) {
-  return createHmac("sha256", SECRET).update(value).digest();
-}
-
-function timingEqual(a: Buffer, b: Buffer) {
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
-}
-
-export function encodeSession(payload: SessionPayload): string {
-  const body = b64url(Buffer.from(JSON.stringify(payload), "utf8"));
-  const sig = b64url(sign(body));
-  return `${body}.${sig}`;
-}
-
-export function decodeSession(token: string): SessionPayload | null {
-  const parts = token.split(".");
-  if (parts.length !== 2) return null;
-  const [body, sig] = parts;
-  let expected: Buffer;
-  try {
-    expected = sign(body);
-  } catch {
-    return null;
-  }
-  const given = fromB64url(sig);
-  if (!timingEqual(expected, given)) return null;
-  try {
-    const json = JSON.parse(
-      fromB64url(body).toString("utf8"),
-    ) as SessionPayload;
-    if (!json || typeof json.id !== "string") return null;
-    return json;
-  } catch {
-    return null;
-  }
-}
+export { SESSION_TTL_MS };
 
 export async function setSessionCookie(payload: SessionPayload) {
+  const session = await createSession(payload.id);
   const jar = await cookies();
-  jar.set(AUTH_COOKIE, encodeSession(payload), {
+  jar.set(AUTH_COOKIE, session.id, {
     httpOnly: true,
     sameSite: "lax",
     path: "/",
-    maxAge: COOKIE_MAX_AGE,
+    maxAge: Math.floor(SESSION_TTL_MS / 1000),
     secure: process.env.NODE_ENV === "production",
   });
 }
 
 export async function clearSessionCookie() {
   const jar = await cookies();
+  const token = jar.get(AUTH_COOKIE)?.value;
+  if (token) {
+    // DB 里的会话也一并删掉，避免残留。
+    await deleteSession(token);
+  }
   jar.delete(AUTH_COOKIE);
 }
 
 /**
- * 在服务端组件 / Server Action 中读取当前登录会话。
- * - 没有 cookie / 签名不匹配 → 返回 null
- * - cookie 中的 id 在数据库已不存在（被删）→ 返回 null
+ * 在服务端组件 / Server Action / API 中读取当前登录会话。
+ * - 没有 cookie / DB 中会话不存在 / 已过期 → null
+ * - 关联的管理员被删 → null
  */
 export async function getSession(): Promise<SessionPayload | null> {
   const jar = await cookies();
   const token = jar.get(AUTH_COOKIE)?.value;
   if (!token) return null;
-  const payload = decodeSession(token);
-  if (!payload) return null;
-  // 仍然回查一次 store，确保用户存在（管理员被删后立即失效）。
-  const admin = findAdminById(payload.id);
-  if (!admin || admin.email !== payload.email) return null;
+
+  const session = await findActiveSession(token);
+  if (!session) return null;
+
+  const admin = await findAdminById(session.adminId);
+  if (!admin) return null;
+
   return {
     id: admin.id,
     email: admin.email,
