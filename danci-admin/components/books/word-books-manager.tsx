@@ -35,6 +35,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Table,
   TableBody,
   TableCell,
@@ -44,6 +51,24 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import type { WordBook } from "@/lib/store";
+
+/** 单词书封面色：红 / 绿 / 蓝 三选一 */
+const BOOK_COVER_OPTIONS = [
+  { value: "📕", label: "红色图书封面" },
+  { value: "📗", label: "绿色图书封面" },
+  { value: "📘", label: "蓝色图书封面" },
+] as const;
+
+/** 默认封面：红色图书封面 */
+const DEFAULT_BOOK_COVER = "📕";
+
+/** 把 cover 值归一化到候选值（旧的非候选值降级为默认封面） */
+function normalizeCover(cover: string | undefined): string {
+  if (!cover) return DEFAULT_BOOK_COVER;
+  return BOOK_COVER_OPTIONS.some((o) => o.value === cover)
+    ? cover
+    : DEFAULT_BOOK_COVER;
+}
 
 interface BookFormValues {
   name: string;
@@ -55,7 +80,7 @@ interface BookFormValues {
 const EMPTY_FORM: BookFormValues = {
   name: "",
   description: "",
-  cover: "📚",
+  cover: DEFAULT_BOOK_COVER,
   wordCount: "0",
 };
 
@@ -178,7 +203,7 @@ export const WordBooksManager = React.forwardRef<
     setEditForm({
       name: book.name,
       description: book.description ?? "",
-      cover: book.cover ?? "📚",
+      cover: normalizeCover(book.cover),
       wordCount: String(book.wordCount ?? 0),
     });
   }
@@ -262,41 +287,48 @@ export const WordBooksManager = React.forwardRef<
         </div>
       </CardHeader>
       <CardContent>
-        {loading ? (
-          <div className="text-muted-foreground text-sm">加载中…</div>
-        ) : books.length === 0 ? (
+        {books.length === 0 ? (
           <div className="text-muted-foreground flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed py-12 text-sm">
             <BookOpenIcon className="size-6" />
             还没有单词书，点击右上角创建吧～
           </div>
         ) : (
-          <Table>
+          <Table className="table-fixed">
             <TableHeader>
               <TableRow>
-                <TableHead className="w-12"></TableHead>
-                <TableHead>名称</TableHead>
+                <TableHead className="w-[5%]"></TableHead>
+                <TableHead className="w-[18%] pl-0">名称</TableHead>
                 <TableHead>描述</TableHead>
-                <TableHead className="w-24 text-right">单词数</TableHead>
-                <TableHead className="w-44">更新时间</TableHead>
-                <TableHead className="w-16 text-right">操作</TableHead>
+                <TableHead className="w-[12%] pl-8">单词数</TableHead>
+                <TableHead className="w-[16%] pl-8">更新时间</TableHead>
+                <TableHead className="w-[6%] text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {books.map((book) => (
                 <TableRow key={book.id}>
                   <TableCell className="text-xl">
-                    {book.cover ?? "📚"}
+                    {normalizeCover(book.cover)}
                   </TableCell>
-                  <TableCell className="font-medium">{book.name}</TableCell>
-                  <TableCell className="text-muted-foreground max-w-[280px] truncate">
-                    {book.description || "—"}
+                  <TableCell className="pl-0 font-medium">
+                    <div className="truncate" title={book.name}>
+                      {book.name}
+                    </div>
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="text-muted-foreground whitespace-normal">
+                    <div
+                      className="line-clamp-2 text-sm leading-relaxed break-words"
+                      title={book.description || ""}
+                    >
+                      {book.description || "—"}
+                    </div>
+                  </TableCell>
+                  <TableCell className="pl-8">
                     <Badge variant="secondary">
                       {book.wordCount.toLocaleString()}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-muted-foreground text-sm">
+                  <TableCell className="text-muted-foreground pl-8 text-sm">
                     {formatDate(book.updatedAt)}
                   </TableCell>
                   <TableCell className="text-right">
@@ -337,7 +369,7 @@ export const WordBooksManager = React.forwardRef<
           <DialogHeader>
             <DialogTitle>新建单词书</DialogTitle>
             <DialogDescription>
-              填写单词书的基本信息，留空描述也可以。
+              填写单词书的基本信息
             </DialogDescription>
           </DialogHeader>
           <form
@@ -365,14 +397,37 @@ export const WordBooksManager = React.forwardRef<
               placeholder="可选"
             />
             <div className="grid grid-cols-2 gap-4">
-              <Field
-                id="book-cover"
-                label="封面（emoji 或文字）"
-                value={createForm.cover}
-                onChange={(v) =>
-                  setCreateForm((s) => ({ ...s, cover: v }))
-                }
-              />
+              <div className="space-y-2">
+                <Label htmlFor="book-cover">封面</Label>
+                <Select
+                  value={createForm.cover}
+                  onValueChange={(v) =>
+                    setCreateForm((s) => ({
+                      ...s,
+                      cover:
+                        typeof v === "string" && v.length > 0
+                          ? v
+                          : DEFAULT_BOOK_COVER,
+                    }))
+                  }
+                >
+                  <SelectTrigger id="book-cover" className="w-full">
+                    <SelectValue placeholder="选择封面">
+                      {BOOK_COVER_OPTIONS.find(
+                        (o) => o.value === createForm.cover,
+                      )?.label ?? createForm.cover}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {BOOK_COVER_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        <span className="mr-2 text-base">{o.value}</span>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
               <Field
                 id="book-count"
                 label="单词数"
@@ -435,12 +490,37 @@ export const WordBooksManager = React.forwardRef<
               }
             />
             <div className="grid grid-cols-2 gap-4">
-              <Field
-                id="edit-book-cover"
-                label="封面"
-                value={editForm.cover}
-                onChange={(v) => setEditForm((s) => ({ ...s, cover: v }))}
-              />
+              <div className="space-y-2">
+                <Label htmlFor="edit-book-cover">封面</Label>
+                <Select
+                  value={editForm.cover}
+                  onValueChange={(v) =>
+                    setEditForm((s) => ({
+                      ...s,
+                      cover:
+                        typeof v === "string" && v.length > 0
+                          ? v
+                          : DEFAULT_BOOK_COVER,
+                    }))
+                  }
+                >
+                  <SelectTrigger id="edit-book-cover" className="w-full">
+                    <SelectValue placeholder="选择封面">
+                      {BOOK_COVER_OPTIONS.find(
+                        (o) => o.value === editForm.cover,
+                      )?.label ?? editForm.cover}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {BOOK_COVER_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        <span className="mr-2 text-base">{o.value}</span>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
               <Field
                 id="edit-book-count"
                 label="单词数"
