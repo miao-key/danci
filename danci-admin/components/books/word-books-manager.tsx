@@ -1,9 +1,11 @@
 "use client";
 
 import * as React from "react";
+import Image from "next/image";
 import { toast } from "sonner";
 import {
   BookOpenIcon,
+  ImageOffIcon,
   MoreHorizontalIcon,
   PencilIcon,
   Trash2Icon,
@@ -35,13 +37,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Table,
   TableBody,
   TableCell,
@@ -50,38 +45,33 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import type { WordBook } from "@/lib/store";
 
-/** 单词书封面色：红 / 绿 / 蓝 三选一 */
-const BOOK_COVER_OPTIONS = [
-  { value: "📕", label: "红色图书封面" },
-  { value: "📗", label: "绿色图书封面" },
-  { value: "📘", label: "蓝色图书封面" },
-] as const;
-
-/** 默认封面：红色图书封面 */
-const DEFAULT_BOOK_COVER = "📕";
-
-/** 把 cover 值归一化到候选值（旧的非候选值降级为默认封面） */
-function normalizeCover(cover: string | undefined): string {
-  if (!cover) return DEFAULT_BOOK_COVER;
-  return BOOK_COVER_OPTIONS.some((o) => o.value === cover)
-    ? cover
-    : DEFAULT_BOOK_COVER;
+/** 单词书（前端视图） */
+export interface WordBook {
+  id: string;
+  title: string | null;
+  wordCount: number | null;
+  coverUrl: string | null;
+  bookId: string;
+  tags: string[];
+  /** 创建时间 —— 列表按它升序排列（最老在上，最新在下） */
+  createdAt: string;
 }
 
 interface BookFormValues {
-  name: string;
-  description: string;
-  cover: string;
+  title: string;
+  bookId: string;
   wordCount: string;
+  coverUrl: string;
+  tags: string;
 }
 
 const EMPTY_FORM: BookFormValues = {
-  name: "",
-  description: "",
-  cover: DEFAULT_BOOK_COVER,
+  title: "",
+  bookId: "",
   wordCount: "0",
+  coverUrl: "",
+  tags: "",
 };
 
 function formatDate(iso: string) {
@@ -163,8 +153,12 @@ export const WordBooksManager = React.forwardRef<
   async function handleCreate(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (creating) return;
-    if (!createForm.name.trim()) {
-      toast.error("请输入单词书名称");
+    if (!createForm.title.trim()) {
+      toast.error("请输入标题");
+      return;
+    }
+    if (!createForm.bookId.trim()) {
+      toast.error("请输入 bookId");
       return;
     }
     setCreating(true);
@@ -173,10 +167,11 @@ export const WordBooksManager = React.forwardRef<
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          name: createForm.name,
-          description: createForm.description,
-          cover: createForm.cover,
+          title: createForm.title,
+          bookId: createForm.bookId,
           wordCount: Number(createForm.wordCount) || 0,
+          coverUrl: createForm.coverUrl,
+          tags: createForm.tags,
         }),
       });
       const data = (await res.json()) as {
@@ -188,7 +183,9 @@ export const WordBooksManager = React.forwardRef<
         return;
       }
       toast.success("单词书已创建");
-      setBooks((prev) => [data.book!, ...prev]);
+      // 追加到末尾，与后端 listBooks 的"按创建时间升序"保持一致，
+      // 避免新增后跳到顶部、刷新后又落到别处的错位
+      setBooks((prev) => [...prev, data.book!]);
       setCreateForm(EMPTY_FORM);
       setCreateOpen(false);
     } catch {
@@ -201,18 +198,19 @@ export const WordBooksManager = React.forwardRef<
   function openEdit(book: WordBook) {
     setEditing(book);
     setEditForm({
-      name: book.name,
-      description: book.description ?? "",
-      cover: normalizeCover(book.cover),
+      title: book.title ?? "",
+      bookId: book.bookId,
       wordCount: String(book.wordCount ?? 0),
+      coverUrl: book.coverUrl ?? "",
+      tags: book.tags.join(", "),
     });
   }
 
   async function handleEdit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!editing || saving) return;
-    if (!editForm.name.trim()) {
-      toast.error("请输入单词书名称");
+    if (!editForm.title.trim()) {
+      toast.error("请输入标题");
       return;
     }
     setSaving(true);
@@ -222,10 +220,10 @@ export const WordBooksManager = React.forwardRef<
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: editing.id,
-          name: editForm.name,
-          description: editForm.description,
-          cover: editForm.cover,
+          title: editForm.title,
           wordCount: Number(editForm.wordCount) || 0,
+          coverUrl: editForm.coverUrl,
+          tags: editForm.tags,
         }),
       });
       const data = (await res.json()) as {
@@ -256,12 +254,18 @@ export const WordBooksManager = React.forwardRef<
         `/api/books?id=${encodeURIComponent(deleting.id)}`,
         { method: "DELETE" },
       );
-      const data = (await res.json()) as { error?: string };
+      const data = (await res.json()) as {
+        error?: string;
+        deletedWords?: number;
+      };
       if (!res.ok) {
         toast.error(data.error ?? "删除失败");
         return;
       }
-      toast.success("已删除");
+      const n = data.deletedWords ?? 0;
+      toast.success(
+        n > 0 ? `已删除，同时清理 ${n.toLocaleString()} 个单词` : "已删除",
+      );
       setBooks((prev) => prev.filter((b) => b.id !== deleting.id));
       setDeleting(null);
     } catch {
@@ -293,50 +297,66 @@ export const WordBooksManager = React.forwardRef<
             还没有单词书，点击右上角创建吧～
           </div>
         ) : (
-          <Table className="table-fixed">
+          <Table>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-[5%]"></TableHead>
-                <TableHead className="w-[18%] pl-0">名称</TableHead>
-                <TableHead>描述</TableHead>
-                <TableHead className="w-[12%] pl-8">单词数</TableHead>
-                <TableHead className="w-[16%] pl-8">更新时间</TableHead>
-                <TableHead className="w-[6%] text-right">操作</TableHead>
+                <TableHead className="w-[64px] pl-2">
+                  <span className="block text-center">封面</span>
+                </TableHead>
+                <TableHead className="w-[220px]">标题</TableHead>
+                <TableHead className="w-[140px]">bookId</TableHead>
+                <TableHead className="w-[96px] pr-4 text-right">
+                  单词数
+                </TableHead>
+                <TableHead className="w-[200px] pl-4">标签</TableHead>
+                <TableHead className="w-[150px]">创建时间</TableHead>
+                <TableHead className="w-[64px] text-right">操作</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {books.map((book) => (
                 <TableRow key={book.id}>
-                  <TableCell className="text-xl">
-                    {normalizeCover(book.cover)}
-                  </TableCell>
-                  <TableCell className="pl-0 font-medium">
-                    <div className="truncate" title={book.name}>
-                      {book.name}
+                  <TableCell className="align-middle pl-2">
+                    <div className="flex justify-center">
+                      <BookCover
+                        url={book.coverUrl}
+                        title={book.title ?? book.bookId}
+                      />
                     </div>
                   </TableCell>
-                  <TableCell className="text-muted-foreground whitespace-normal">
+                  <TableCell className="align-middle font-medium">
                     <div
-                      className="line-clamp-2 text-sm leading-relaxed break-words"
-                      title={book.description || ""}
+                      className="line-clamp-2 leading-snug"
+                      title={book.title ?? ""}
                     >
-                      {book.description || "—"}
+                      {book.title ?? (
+                        <span className="text-muted-foreground">（未命名）</span>
+                      )}
                     </div>
                   </TableCell>
-                  <TableCell className="pl-8">
-                    <Badge variant="secondary">
-                      {book.wordCount.toLocaleString()}
+                  <TableCell className="align-middle">
+                    <div
+                      className="truncate font-mono text-xs"
+                      title={book.bookId}
+                    >
+                      {book.bookId}
+                    </div>
+                  </TableCell>
+                  <TableCell className="align-middle pr-4 text-right">
+                    <Badge variant="secondary" className="tabular-nums">
+                      {(book.wordCount ?? 0).toLocaleString()}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-muted-foreground pl-8 text-sm">
-                    {formatDate(book.updatedAt)}
+                  <TableCell className="align-middle pl-4">
+                    <TagList tags={book.tags} />
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="text-muted-foreground align-middle text-sm tabular-nums">
+                    {formatDate(book.createdAt)}
+                  </TableCell>
+                  <TableCell className="align-middle text-right">
                     <DropdownMenu>
                       <DropdownMenuTrigger
-                        render={
-                          <Button variant="ghost" size="icon-sm" />
-                        }
+                        render={<Button variant="ghost" size="icon-sm" />}
                         aria-label="更多操作"
                       >
                         <MoreHorizontalIcon />
@@ -367,9 +387,9 @@ export const WordBooksManager = React.forwardRef<
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>新建单词书</DialogTitle>
+            <DialogTitle className="font-semibold">新增单词书</DialogTitle>
             <DialogDescription>
-              填写单词书的基本信息
+              填写单词书基本信息并创建
             </DialogDescription>
           </DialogHeader>
           <form
@@ -378,67 +398,51 @@ export const WordBooksManager = React.forwardRef<
             className="space-y-4"
           >
             <Field
-              id="book-name"
-              label="名称"
-              value={createForm.name}
+              id="create-book-title"
+              label="标题"
+              value={createForm.title}
               onChange={(v) =>
-                setCreateForm((s) => ({ ...s, name: v }))
+                setCreateForm((s) => ({ ...s, title: v }))
               }
               placeholder="例如：高考英语词汇"
               required
             />
             <Field
-              id="book-desc"
-              label="描述"
-              value={createForm.description}
+              id="create-book-id"
+              label="bookId"
+              value={createForm.bookId}
               onChange={(v) =>
-                setCreateForm((s) => ({ ...s, description: v }))
+                setCreateForm((s) => ({ ...s, bookId: v }))
               }
-              placeholder="可选"
+              placeholder="例如：CET4_2"
+              required
             />
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="book-cover">封面</Label>
-                <Select
-                  value={createForm.cover}
-                  onValueChange={(v) =>
-                    setCreateForm((s) => ({
-                      ...s,
-                      cover:
-                        typeof v === "string" && v.length > 0
-                          ? v
-                          : DEFAULT_BOOK_COVER,
-                    }))
-                  }
-                >
-                  <SelectTrigger id="book-cover" className="w-full">
-                    <SelectValue placeholder="选择封面">
-                      {BOOK_COVER_OPTIONS.find(
-                        (o) => o.value === createForm.cover,
-                      )?.label ?? createForm.cover}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {BOOK_COVER_OPTIONS.map((o) => (
-                      <SelectItem key={o.value} value={o.value}>
-                        <span className="mr-2 text-base">{o.value}</span>
-                        {o.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Field
-                id="book-count"
-                label="单词数"
-                type="number"
-                value={createForm.wordCount}
-                onChange={(v) =>
-                  setCreateForm((s) => ({ ...s, wordCount: v }))
-                }
-                min={0}
-              />
-            </div>
+            <Field
+              id="create-book-count"
+              label="单词数量"
+              type="number"
+              value={createForm.wordCount}
+              onChange={(v) =>
+                setCreateForm((s) => ({ ...s, wordCount: v }))
+              }
+              min={0}
+            />
+            <Field
+              id="create-book-cover"
+              label="封面 URL"
+              value={createForm.coverUrl}
+              onChange={(v) =>
+                setCreateForm((s) => ({ ...s, coverUrl: v }))
+              }
+              placeholder="https://example.com/cover.jpg"
+            />
+            <Field
+              id="create-book-tags"
+              label="标签"
+              value={createForm.tags}
+              onChange={(v) => setCreateForm((s) => ({ ...s, tags: v }))}
+              placeholder="逗号分隔，例如：人教版，六年级"
+            />
           </form>
           <DialogFooter>
             <DialogClose render={<Button variant="outline" />}>
@@ -464,9 +468,13 @@ export const WordBooksManager = React.forwardRef<
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>编辑单词书</DialogTitle>
+            <DialogTitle className="flex items-center gap-2">
+              <PencilIcon className="size-4" />
+              编辑单词书
+            </DialogTitle>
             <DialogDescription>
-              更新 &ldquo;{editing?.name}&rdquo; 的信息。
+              更新 &ldquo;{editing?.title ?? editing?.bookId}&rdquo; 的信息（bookId
+              不可改）。
             </DialogDescription>
           </DialogHeader>
           <form
@@ -475,55 +483,28 @@ export const WordBooksManager = React.forwardRef<
             className="space-y-4"
           >
             <Field
-              id="edit-book-name"
-              label="名称"
-              value={editForm.name}
-              onChange={(v) => setEditForm((s) => ({ ...s, name: v }))}
+              id="edit-book-title"
+              label="标题"
+              value={editForm.title}
+              onChange={(v) => setEditForm((s) => ({ ...s, title: v }))}
               required
             />
-            <Field
-              id="edit-book-desc"
-              label="描述"
-              value={editForm.description}
-              onChange={(v) =>
-                setEditForm((s) => ({ ...s, description: v }))
-              }
-            />
+            <div className="space-y-2">
+              <Label htmlFor="edit-book-id">bookId</Label>
+              <Input
+                id="edit-book-id"
+                value={editForm.bookId}
+                disabled
+                className="bg-muted"
+              />
+              <p className="text-muted-foreground text-xs">
+                bookId 与单词数据关联，修改会破坏关联关系，因此不可修改
+              </p>
+            </div>
             <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="edit-book-cover">封面</Label>
-                <Select
-                  value={editForm.cover}
-                  onValueChange={(v) =>
-                    setEditForm((s) => ({
-                      ...s,
-                      cover:
-                        typeof v === "string" && v.length > 0
-                          ? v
-                          : DEFAULT_BOOK_COVER,
-                    }))
-                  }
-                >
-                  <SelectTrigger id="edit-book-cover" className="w-full">
-                    <SelectValue placeholder="选择封面">
-                      {BOOK_COVER_OPTIONS.find(
-                        (o) => o.value === editForm.cover,
-                      )?.label ?? editForm.cover}
-                    </SelectValue>
-                  </SelectTrigger>
-                  <SelectContent>
-                    {BOOK_COVER_OPTIONS.map((o) => (
-                      <SelectItem key={o.value} value={o.value}>
-                        <span className="mr-2 text-base">{o.value}</span>
-                        {o.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
               <Field
                 id="edit-book-count"
-                label="单词数"
+                label="单词数量"
                 type="number"
                 value={editForm.wordCount}
                 onChange={(v) =>
@@ -531,7 +512,23 @@ export const WordBooksManager = React.forwardRef<
                 }
                 min={0}
               />
+              <Field
+                id="edit-book-cover"
+                label="封面 URL"
+                value={editForm.coverUrl}
+                onChange={(v) =>
+                  setEditForm((s) => ({ ...s, coverUrl: v }))
+                }
+                placeholder="https://example.com/cover.jpg"
+              />
             </div>
+            <Field
+              id="edit-book-tags"
+              label="标签"
+              value={editForm.tags}
+              onChange={(v) => setEditForm((s) => ({ ...s, tags: v }))}
+              placeholder="逗号分隔，例如：人教版，六年级"
+            />
           </form>
           <DialogFooter>
             <DialogClose render={<Button variant="outline" />}>
@@ -553,9 +550,15 @@ export const WordBooksManager = React.forwardRef<
       >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>删除单词书？</DialogTitle>
+            <DialogTitle>删除单词书</DialogTitle>
             <DialogDescription>
-              确认删除 &ldquo;{deleting?.name}&rdquo;？该操作不可撤销。
+              确认删除 &ldquo;{deleting?.title ?? deleting?.bookId}&rdquo;？
+              <br />
+              该书下的{" "}
+              <span className="text-foreground font-medium tabular-nums">
+                {(deleting?.wordCount ?? 0).toLocaleString()}
+              </span>{" "}
+              个单词也会一并删除，此操作不可撤销。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -575,6 +578,8 @@ export const WordBooksManager = React.forwardRef<
     </Card>
   );
 });
+
+// ============== 子组件 ==============
 
 interface FieldProps {
   id: string;
@@ -609,6 +614,58 @@ function Field({
         required={required}
         min={min}
       />
+    </div>
+  );
+}
+
+/** 封面缩略图：失败时显示图标占位 */
+function BookCover({ url, title }: { url: string | null; title: string }) {
+  const [failed, setFailed] = React.useState(false);
+
+  if (!url || failed) {
+    return (
+      <div className="bg-muted text-muted-foreground flex h-[66px] w-[44px] items-center justify-center rounded-md border shadow-xs">
+        {failed ? (
+          <ImageOffIcon className="size-5" />
+        ) : (
+          <BookOpenIcon className="size-5" />
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="bg-muted relative h-[66px] w-[44px] overflow-hidden rounded-md border shadow-xs">
+      <Image
+        src={url}
+        alt={title}
+        fill
+        sizes="44px"
+        className="object-cover"
+        onError={() => setFailed(true)}
+        unoptimized
+      />
+    </div>
+  );
+}
+
+/** 标签列表（多余用 +N 折叠） */
+function TagList({ tags }: { tags: string[] }) {
+  if (tags.length === 0) {
+    return <span className="text-muted-foreground text-xs">—</span>;
+  }
+  const visible = tags.slice(0, 3);
+  const extra = tags.length - visible.length;
+  return (
+    <div className="flex flex-wrap items-center gap-1">
+      {visible.map((t, i) => (
+        <Badge key={i} variant="outline" className="text-xs">
+          {t}
+        </Badge>
+      ))}
+      {extra > 0 && (
+        <span className="text-muted-foreground text-xs">+{extra}</span>
+      )}
     </div>
   );
 }

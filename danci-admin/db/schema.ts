@@ -6,6 +6,7 @@
 import { sql } from "drizzle-orm";
 import {
   bigserial,
+  index,
   integer,
   json,
   pgEnum,
@@ -89,6 +90,51 @@ export const words = pgTable("words", {
   bookId: text("bookId"),
 });
 
+/**
+ * 单词书表
+ *
+ * 数据流：
+ *   books.bookId ⇋ words.bookId
+ *   - words.bookId 上的索引（已存在）让按书查单词走索引扫描
+ *   - 这里加 (bookId) 索引让 books 自身按 bookId 查也走索引
+ *
+ * 字段说明：
+ * - id        ：自定义主键，格式 "book-<random>"，与 admin_users 风格一致
+ * - title     ：单词书标题（用户在 UI 上看到的名字）
+ * - wordCount ：单词数量（冗余字段，导入单词时一并更新，UI 直接读不用 COUNT）
+ * - coverUrl  ：封面图片 URL（不再用 emoji，UI 渲染为 <img>）
+ * - bookId    ：业务唯一标识（如 "CET4_2"、"PEPXiaoXue6_1"），与 words.bookId 对应
+ * - tags      ：标签数组（JSON 字符串），UI 写入时逗号分隔，存为 JSON 数组字符串
+ * - createdAt / updatedAt：审计字段。
+ *   注意：createdAt 是**列表排序键**（见 lib/book-repo.ts 的 listBooks），
+ *   编辑书本时**不能**改动它，否则书本会在列表中跳位；
+ *   updatedAt 仅作审计留痕，列表不展示。
+ *
+ * 注意：
+ * - 这里**不**对 words.bookId 加外键引用 books.bookId，外键 + CASCADE 会导致
+ *   "删除一本书 ⇒ 自动删掉对应所有单词" 这种灾难性后果。我们保留单向弱引用。
+ */
+export const books = pgTable(
+  "books",
+  {
+    id: text("id").primaryKey(),
+    title: text("title"),
+    wordCount: integer("wordCount").default(0),
+    coverUrl: text("coverUrl"),
+    bookId: text("bookId").notNull().unique(),
+    tags: text("tags"), // JSON 字符串，例如 '["初中","PEP"]'
+    createdAt: timestamp("createdAt", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp("updatedAt", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    bookIdIdx: index("books_book_id_idx").on(table.bookId),
+  }),
+);
+
 // 导出类型，方便上层使用
 export type AdminUserRow = typeof adminUsers.$inferSelect;
 export type AdminUserInsert = typeof adminUsers.$inferInsert;
@@ -96,6 +142,8 @@ export type AdminSessionRow = typeof adminSession.$inferSelect;
 export type AdminSessionInsert = typeof adminSession.$inferInsert;
 export type WordRow = typeof words.$inferSelect;
 export type WordInsert = typeof words.$inferInsert;
+export type BookRow = typeof books.$inferSelect;
+export type BookInsert = typeof books.$inferInsert;
 export type AdminRole = (typeof adminRoleEnum.enumValues)[number]; // "super" | "normal"
 export type AdminStatus = (typeof adminStatusEnum.enumValues)[number]; // "active" | "disabled"
 
