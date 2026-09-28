@@ -6,7 +6,6 @@ import {
   BookOpenIcon,
   MoreHorizontalIcon,
   PencilIcon,
-  PlusIcon,
   Trash2Icon,
 } from "lucide-react";
 
@@ -26,7 +25,6 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import {
   DropdownMenu,
@@ -76,7 +74,15 @@ function formatDate(iso: string) {
   }
 }
 
-export function WordBooksManager() {
+export interface WordBooksManagerHandle {
+  /** 打开"新建单词书"对话框（由外部 trigger 调用） */
+  openCreate: () => void;
+}
+
+export const WordBooksManager = React.forwardRef<
+  WordBooksManagerHandle,
+  object
+>(function WordBooksManager(_props, ref) {
   const [books, setBooks] = React.useState<WordBook[]>([]);
   const [loading, setLoading] = React.useState(true);
 
@@ -92,6 +98,15 @@ export function WordBooksManager() {
 
   const [deleting, setDeleting] = React.useState<WordBook | null>(null);
   const [deletingBusy, setDeletingBusy] = React.useState(false);
+
+  // 暴露 imperative API：让父级"新增单词书"按钮能打开 Dialog
+  React.useImperativeHandle(
+    ref,
+    () => ({
+      openCreate: () => setCreateOpen(true),
+    }),
+    [],
+  );
 
   const fetchBooks = React.useCallback(async () => {
     setLoading(true);
@@ -237,87 +252,14 @@ export function WordBooksManager() {
         <div>
           <CardTitle className="flex items-center gap-2 text-lg">
             <BookOpenIcon className="size-4" />
-            单词书管理
+            单词书列表
           </CardTitle>
           <CardDescription>
-            维护后台可用的单词书，包括创建、编辑和删除。
+            {loading
+              ? "加载中…"
+              : `共 ${books.length.toLocaleString()} 本单词书`}
           </CardDescription>
         </div>
-        <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-          <DialogTrigger
-            render={
-              <Button>
-                <PlusIcon />
-                新建单词书
-              </Button>
-            }
-          />
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>新建单词书</DialogTitle>
-              <DialogDescription>
-                填写单词书的基本信息，留空描述也可以。
-              </DialogDescription>
-            </DialogHeader>
-            <form
-              id="create-book-form"
-              onSubmit={handleCreate}
-              className="space-y-4"
-            >
-              <Field
-                id="book-name"
-                label="名称"
-                value={createForm.name}
-                onChange={(v) =>
-                  setCreateForm((s) => ({ ...s, name: v }))
-                }
-                placeholder="例如：高考英语词汇"
-                required
-              />
-              <Field
-                id="book-desc"
-                label="描述"
-                value={createForm.description}
-                onChange={(v) =>
-                  setCreateForm((s) => ({ ...s, description: v }))
-                }
-                placeholder="可选"
-              />
-              <div className="grid grid-cols-2 gap-4">
-                <Field
-                  id="book-cover"
-                  label="封面（emoji 或文字）"
-                  value={createForm.cover}
-                  onChange={(v) =>
-                    setCreateForm((s) => ({ ...s, cover: v }))
-                  }
-                />
-                <Field
-                  id="book-count"
-                  label="单词数"
-                  type="number"
-                  value={createForm.wordCount}
-                  onChange={(v) =>
-                    setCreateForm((s) => ({ ...s, wordCount: v }))
-                  }
-                  min={0}
-                />
-              </div>
-            </form>
-            <DialogFooter>
-              <DialogClose render={<Button variant="outline" />}>
-                取消
-              </DialogClose>
-              <Button
-                type="submit"
-                form="create-book-form"
-                disabled={creating}
-              >
-                {creating ? "创建中…" : "创建"}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
       </CardHeader>
       <CardContent>
         {loading ? (
@@ -388,6 +330,75 @@ export function WordBooksManager() {
           </Table>
         )}
       </CardContent>
+
+      {/* Create Dialog */}
+      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>新建单词书</DialogTitle>
+            <DialogDescription>
+              填写单词书的基本信息，留空描述也可以。
+            </DialogDescription>
+          </DialogHeader>
+          <form
+            id="create-book-form"
+            onSubmit={handleCreate}
+            className="space-y-4"
+          >
+            <Field
+              id="book-name"
+              label="名称"
+              value={createForm.name}
+              onChange={(v) =>
+                setCreateForm((s) => ({ ...s, name: v }))
+              }
+              placeholder="例如：高考英语词汇"
+              required
+            />
+            <Field
+              id="book-desc"
+              label="描述"
+              value={createForm.description}
+              onChange={(v) =>
+                setCreateForm((s) => ({ ...s, description: v }))
+              }
+              placeholder="可选"
+            />
+            <div className="grid grid-cols-2 gap-4">
+              <Field
+                id="book-cover"
+                label="封面（emoji 或文字）"
+                value={createForm.cover}
+                onChange={(v) =>
+                  setCreateForm((s) => ({ ...s, cover: v }))
+                }
+              />
+              <Field
+                id="book-count"
+                label="单词数"
+                type="number"
+                value={createForm.wordCount}
+                onChange={(v) =>
+                  setCreateForm((s) => ({ ...s, wordCount: v }))
+                }
+                min={0}
+              />
+            </div>
+          </form>
+          <DialogFooter>
+            <DialogClose render={<Button variant="outline" />}>
+              取消
+            </DialogClose>
+            <Button
+              type="submit"
+              form="create-book-form"
+              disabled={creating}
+            >
+              {creating ? "创建中…" : "创建"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit Dialog */}
       <Dialog
@@ -483,7 +494,7 @@ export function WordBooksManager() {
       </Dialog>
     </Card>
   );
-}
+});
 
 interface FieldProps {
   id: string;
