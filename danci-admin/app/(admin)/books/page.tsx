@@ -1,9 +1,5 @@
-import { WordBooksManager } from "@/components/books/word-books-manager";
+import { WordBooksClient } from "@/components/books/word-books-client";
 
 export default function BooksPage() {
-  return (
-    <div className="mx-auto w-full max-w-6xl space-y-6">
-      <WordBooksManager />
-    </div>
-  );
+  return <WordBooksClient />;
 }
