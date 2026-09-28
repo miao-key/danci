@@ -19,6 +19,10 @@ import type { AdminRole } from "@/db/schema";
  * - POST  ：新增管理员，仅 super 可调用；body 包含 name/email/password/role
  * - DELETE：?id=xxx 删除管理员，仅 super 可调用，且不能删自己、不能删最后一位 super
  */
+
+// 禁用路由级缓存，确保每次请求都实时从数据库拉最新数据
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   const guard = await requireSuper();
   if (!guard.ok) return guard.response;

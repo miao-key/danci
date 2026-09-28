@@ -4,7 +4,7 @@
  * 暴露的方法与旧 `lib/store.ts` 中的 admin 接口保持一致，
  * 便于上层 UI / API 最小化改动。
  */
-import { count, desc, eq } from "drizzle-orm";
+import { asc, count, eq } from "drizzle-orm";
 
 import { db } from "@/db";
 import {
@@ -40,12 +40,12 @@ export async function countAdmins(): Promise<number> {
   return Number(value);
 }
 
-/** 列出所有管理员（按创建时间倒序：最新创建的在最前/视觉上最显眼的位置） */
+/** 列出所有管理员（按创建时间正序：最早创建的在上，最新创建的在最下方） */
 export async function listAdmins(): Promise<SafeAdmin[]> {
   const rows = await db
     .select()
     .from(adminUsers)
-    .orderBy(desc(adminUsers.createdAt));
+    .orderBy(asc(adminUsers.createdAt), asc(adminUsers.id));
   return rows.map(toSafe);
 }
 

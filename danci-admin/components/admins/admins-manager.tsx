@@ -553,7 +553,7 @@ export const AdminsManager = React.forwardRef<
           <DialogHeader>
             <DialogTitle>编辑管理员</DialogTitle>
             <DialogDescription>
-              修改 &ldquo;{editing?.name}&rdquo; 的信息。留空密码表示不修改密码。
+              修改管理员账号信息
             </DialogDescription>
           </DialogHeader>
           <form
