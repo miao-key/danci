@@ -103,3 +103,6 @@ ai生成一个script 脚本，本地运行
 ### 让ai 了解supabase 有books 表 
 - 本地建schema
 - 后台图书业务
+## cascade 级联删除
+  外键声明后面加上
+  on delete cascade
