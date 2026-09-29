@@ -55,9 +55,13 @@ function SignInFormInner() {
       });
       const data = (await res.json()) as {
         error?: string;
+        detail?: string;
       };
       if (!res.ok) {
-        toast.error(data.error ?? "登录失败");
+        const msg = data.detail
+          ? `${data.error ?? "登录失败"}: ${data.detail}`
+          : (data.error ?? "登录失败");
+        toast.error(msg, { duration: 8000 });
         return;
       }
       toast.success("登录成功");

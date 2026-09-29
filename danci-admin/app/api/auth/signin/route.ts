@@ -39,7 +39,16 @@ export async function POST(request: Request) {
     );
   }
 
-  const admin = await findAdminByEmailWithSecret(email);
+  let admin;
+  try {
+    admin = await findAdminByEmailWithSecret(email);
+  } catch (e) {
+    console.error("[signin] 查询管理员失败:", e);
+    return NextResponse.json(
+      { error: "服务器内部错误", detail: String((e as Error).message) },
+      { status: 500 },
+    );
+  }
   if (!admin || !(await verifyPassword(password, admin.passwordHash))) {
     return NextResponse.json(
       { error: "邮箱或密码错误" },
@@ -47,12 +56,20 @@ export async function POST(request: Request) {
     );
   }
 
-  await setSessionCookie({
-    id: admin.id,
-    email: admin.email,
-    name: admin.name,
-    role: admin.role,
-  });
+  try {
+    await setSessionCookie({
+      id: admin.id,
+      email: admin.email,
+      name: admin.name,
+      role: admin.role,
+    });
+  } catch (e) {
+    console.error("[signin] 设置会话失败:", e);
+    return NextResponse.json(
+      { error: "服务器内部错误", detail: String((e as Error).message) },
+      { status: 500 },
+    );
+  }
 
   return NextResponse.json({
     ok: true,
