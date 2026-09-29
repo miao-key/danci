@@ -52,18 +52,23 @@ function getDb(): DrizzleDb {
     globalForDb.__danciPg ??
     postgres(connectionString, {
       prepare: false,
-      // Supabase 直连默认端口 5432；如果走 pooler 端口（6543）也兼容。
-      max: 10,
+      // Serverless 场景下严格控制连接数：
+      // - max 越小，pgBouncer 排队越快失败而不是耗尽
+      // - idle_timeout 短：lambda 闲置时立刻释放回 pool
+      // - 连接生命周期 <= 30s：强制回收，避免 pgBouncer session 模式锁住
+      max: 2,
+      idle_timeout: 5,
+      max_lifetime: 30,
       // Supabase pooler（事务模式）要求 SSL；直连也兼容。
       ssl: "require",
     });
 
   const db = drizzle(client);
 
-  if (process.env.NODE_ENV !== "production") {
-    globalForDb.__danciPg = client;
-    globalForDb.__danciDrizzle = db;
-  }
+  // 关键 —— 在 production 也要缓存 client！
+  // 否则 Vercel 每个 lambda 冷启动都新建连接，pgBouncer session mode 限 15 个很快耗尽。
+  globalForDb.__danciPg = client;
+  globalForDb.__danciDrizzle = db;
 
   return db;
 }

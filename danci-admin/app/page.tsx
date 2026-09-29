@@ -15,33 +15,46 @@ export const dynamic = "force-dynamic";
  *   2) /api/auth/has-admin 探测是否存在管理员
  *      - 无管理员 → /signup
  *      - 有管理员 → /signin
+ *
+ * 任意一个探测超时/失败都不会让页面一直卡住 —— 客户端用 AbortController
+ * 给每个 fetch 加 4s 上限，超时直接走 /signin。
  */
 export default function RootRedirectPage() {
   const router = useRouter();
 
   useEffect(() => {
     let cancelled = false;
+
+    const fetchWithTimeout = (url: string, ms: number) =>
+      fetch(url, {
+        cache: "no-store",
+        signal: AbortSignal.timeout(ms),
+      }).catch(() => null);
+
     (async () => {
       try {
-        const [meRes, adminRes] = await Promise.all([
-          fetch("/api/auth/me", { cache: "no-store" }),
-          fetch("/api/auth/has-admin", { cache: "no-store" }),
-        ]);
+        // me 探测：未登录必然 401，也走下一步
+        const meRes = await fetchWithTimeout("/api/auth/me", 4000);
         if (cancelled) return;
 
-        if (meRes.ok) {
-          const me = (await meRes.json()) as { admin?: unknown };
-          if (me.admin) {
+        if (meRes?.ok) {
+          const me = (await meRes.json()) as { user?: unknown };
+          if (me.user) {
             router.replace("/books");
             return;
           }
         }
-        if (adminRes.ok) {
+
+        // has-admin 探测：失败/超时保守视为"有管理员"，进入 /signin
+        const adminRes = await fetchWithTimeout("/api/auth/has-admin", 4000);
+        if (cancelled) return;
+
+        if (adminRes?.ok) {
           const data = (await adminRes.json()) as { hasAdmin?: boolean };
           router.replace(data.hasAdmin ? "/signin" : "/signup");
           return;
         }
-        // 两个探测都失败：保守跳登录页
+        // 探测失败：保守跳登录页
         router.replace("/signin");
       } catch {
         if (!cancelled) router.replace("/signin");
