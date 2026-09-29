@@ -1,9 +1,14 @@
 "use client";
 
-import * as React from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 import { SignInForm } from "@/components/auth/sign-in-form";
+
+// 显式标记为动态：构建期不再尝试预渲染 /signin。
+// 这是关键：一旦走预渲染，Next.js 会触发 useSearchParams() 的 Suspense 校验，
+// 同时也会顺着 import 链路扫到任何潜在的服务端 DB 调用。
+export const dynamic = "force-dynamic";
 
 /**
  * /signin (客户端)
@@ -16,7 +21,7 @@ import { SignInForm } from "@/components/auth/sign-in-form";
 export default function SignInPage() {
   const router = useRouter();
 
-  React.useEffect(() => {
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {

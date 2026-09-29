@@ -19,6 +19,21 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 
 export function SignInForm() {
+  // 外层只做 Suspense 包裹：useSearchParams 在预渲染时必须处于 Suspense 边界内
+  // （Next.js 16 在 next build 阶段会强制要求）。
+  return (
+    <React.Suspense fallback={null}>
+      <SignInFormInner />
+    </React.Suspense>
+  );
+}
+
+/**
+ * 真正使用 useSearchParams 的内部组件。
+ * 必须包在 <Suspense> 里（由外层 SignInForm 提供），否则 Next.js 16 在
+ * `next build` 预渲染时会抛 "useSearchParams() should be wrapped in a suspense boundary"。
+ */
+function SignInFormInner() {
   const router = useRouter();
   const search = useSearchParams();
   const nextPath = search.get("next") || "/books";

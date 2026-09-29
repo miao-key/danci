@@ -1,9 +1,12 @@
 "use client";
 
-import * as React from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 import { SignUpForm } from "@/components/auth/sign-up-form";
+
+// 显式标记为动态：构建期不再尝试预渲染 /signup。
+export const dynamic = "force-dynamic";
 
 /**
  * /signup (客户端)
@@ -14,7 +17,7 @@ import { SignUpForm } from "@/components/auth/sign-up-form";
 export default function SignUpPage() {
   const router = useRouter();
 
-  React.useEffect(() => {
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {

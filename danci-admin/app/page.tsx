@@ -1,7 +1,10 @@
 "use client";
 
-import * as React from "react";
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
+
+// 显式标记为动态：构建期不再尝试预渲染 /。
+export const dynamic = "force-dynamic";
 
 /**
  * 根路径分发（客户端）
@@ -16,7 +19,7 @@ import { useRouter } from "next/navigation";
 export default function RootRedirectPage() {
   const router = useRouter();
 
-  React.useEffect(() => {
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       try {
