@@ -1,37 +1,35 @@
+/**
+ * 登录整页。
+ *
+ * 保留此页有两个原因（proposal 3）：
+ *   1. `auth.config.ts` 的 `pages.signIn` 指向它 —— 未登录直接敲
+ *      `/study/xxx` 时 NextAuth 会把用户重定向到这里兜底；
+ *   2. 需求要求"保留已有逻辑"。
+ *
+ * 表单逻辑与登录弹窗共用同一批 Server Action，不存在两套实现。
+ */
 import Link from 'next/link';
-import { Form } from 'app/form';
-import { signIn } from 'app/auth';
-import { SubmitButton } from 'app/submit-button';
+import { AuthForm } from '@/components/auth-form';
 
-export default function Login() {
+export default function LoginPage() {
   return (
-    <div className="flex h-screen w-screen items-center justify-center bg-gray-50">
-      <div className="z-10 w-full max-w-md overflow-hidden rounded-2xl border border-gray-100 shadow-xl">
-        <div className="flex flex-col items-center justify-center space-y-3 border-b border-gray-200 bg-white px-4 py-6 pt-8 text-center sm:px-16">
-          <h3 className="text-xl font-semibold">Sign In</h3>
-          <p className="text-sm text-gray-500">
-            Use your email and password to sign in
+    <div className="flex min-h-[100dvh] w-full items-center justify-center bg-slate-50 px-6">
+      <div className="w-full max-w-sm">
+        <div className="mb-6 text-center">
+          <h1 className="text-xl font-semibold text-slate-900">登录</h1>
+          <p className="mt-1.5 text-sm text-slate-500">
+            登录后自动记录你的学习进度
           </p>
         </div>
-        <Form
-          action={async (formData: FormData) => {
-            'use server';
-            await signIn('credentials', {
-              redirectTo: '/protected',
-              email: formData.get('email') as string,
-              password: formData.get('password') as string,
-            });
-          }}
-        >
-          <SubmitButton>Sign in</SubmitButton>
-          <p className="text-center text-sm text-gray-600">
-            {"Don't have an account? "}
-            <Link href="/register" className="font-semibold text-gray-800">
-              Sign up
-            </Link>
-            {' for free.'}
-          </p>
-        </Form>
+        <div className="rounded-2xl bg-white p-5 shadow-sm">
+          <AuthForm mode="login" />
+        </div>
+        <p className="mt-4 text-center text-sm text-slate-500">
+          还没有账号？{' '}
+          <Link href="/register" className="font-medium text-brand-600">
+            立即注册
+          </Link>
+        </p>
       </div>
     </div>
   );
