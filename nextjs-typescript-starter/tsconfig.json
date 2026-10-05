@@ -9,6 +9,8 @@
       "@/components/*": ["components/*"],
       "@/pages/*": ["pages/*"],
       "@/app/*": ["app/*"],
+      "@/db": ["db/index.ts"],
+      "@/db/*": ["db/*"],
       "@/lib/*": ["lib/*"],
       "@/styles/*": ["styles/*"]
     },
