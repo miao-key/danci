@@ -76,6 +76,24 @@ create index if not exists books_book_id_idx
 
 > **`json` vs `jsonb` 是本项目最大的技术约束**，第 3.4、10.2 节会给出应对方案。
 
+#### 1.1.1 `words.content` 里音标字段的脏数据（写代码前必读）
+
+源数据（金山/有道导出）的 `usphone` / `ukphone` **不能直接渲染**。已在真库 3869 条上实测：
+
+| 问题 | 实例 | 处理 |
+| --- | --- | --- |
+| 用 ASCII `'` 代替 IPA 重音符 `ˈ` | `'saɪəns` | 换成 `ˈ` |
+| 开头混入逗号 | `,saɪkə'lɑdʒɪkl` | 去掉 |
+| 多音节用 `;` 串接 | `æbˈsɔrb; æbˈzɔrb; əbˈsɔrb` | 取第一段 |
+| 已混用标准 `ˈ`，两种写法并存 | 180 行是 `ˈ`，2468 行是 `'` | 统一 |
+
+> ⚠️ **`'` 位置有意义，是音节重音符，绝不能 strip**：
+> `ə'bændən`(abandon)、`dɪ'lɪʃəs`(delicious)、`ovɚ'kʌm`(overcome)。
+> 删掉会丢失重音信息，词就教错了。正确形式是 `əˈbændən`。
+>
+> 实测**双引号、反引号在真库中 0 命中**，所以规范化只处理上面 4 类。
+> 实现见 `lib/word-content.ts` 的 `normalizePhonetic`。
+
 ### 1.2 单词 content 的真实结构
 
 源文件 `danci-admin/temp/PEPXiaoXue6_1.json` 是 **130 个 JSON 对象顺序拼接（JSONL 形态，非合法 JSON 数组）**，每个对象形如：
@@ -1690,6 +1708,96 @@ export default async function WordDetailPage({
 ```
 
 **空字段整块不渲染**：每个区块都用 `length > 0` 包裹，符合项目"不渲染空状态占位"的规范。
+
+---
+
+## 7.6 学习模式的实现决策（2026-10-05 补充）
+
+> 本节记录实现时对 5.5 / 7.5 / 7.3 的**修订**，以及对应的验证方式。
+
+### 7.6.1 分层：新增 `lib/study-service.ts`
+
+首页既要 SSR 首屏（无闪烁），又要对外提供真实数据的 API。若两处各写一份
+组装逻辑，字段一改就漂移。所以抽出服务层作为**单一数据源**：
+
+```text
+  app/(tabs)/page.tsx ─────┐
+                          ├─→ study-service.ts ─→ progress-repo / word-repo ─→ db
+  app/api/study 下的路由 ──┘
+```
+
+| 函数 | 职责 | 消费方 |
+| --- | --- | --- |
+| `loadRecentStudy` | 组装「最近学习」，判别式返回 `found` / `none` / `book-deleted` | 首页、`/api/study/recent` |
+| `loadStudyCards` | 分批取词卡，算好 `afterRank` / `hasMore` / `nextAfterRank` | 学习页、`/api/study/[bookId]/cards` |
+| `loadProgressList` | 我的页进度列表，预计算 `percent` | 我的页 |
+
+### 7.6.2 首页「最近学习」：SSR 直读 + API 出口
+
+**决策：SSR 直读服务层做首屏，同时新增 `GET /api/study/recent`。**
+
+理由：验收 A6 要求「无进度时连标题一起不渲染」。若改成客户端 onMount 后
+fetch，首屏必须先渲染 loading 骨架，新用户每次进首页都会看到一次闪烁。
+SSR 直读在服务端就判定好有无数据，首屏即最终态。
+
+那个 API 不是重复劳动 —— 它是**同一份服务层逻辑**的对外出口，字段口径
+天然一致，原生端 / 小程序端可直接复用。
+
+**API 契约**
+
+| 端点 | 参数 | 返回 |
+| --- | --- | --- |
+| `GET /api/study/recent` | — | `{ data: RecentStudy \| null }`，无数据返 **200 + data:null**（不是 404，调用方要区分「空」与「错」） |
+| `GET /api/study/[bookId]/cards` | `afterRank` / `from=last` / `limit`（≤200） | `{ data: { bookId, bookTitle, wordCount, afterRank, nextAfterRank, hasMore, cards } }` |
+
+⚠️ `/api/*` **不在** `PROTECTED_PREFIXES` 里，middleware 不会拦截，
+所以每个 `/api/study/**` 路由**必须自己调 `currentUser()`** 鉴权，
+且 `userId` 一律取自 session。
+
+### 7.6.3 分批加载：解决大书「假学完」
+
+`CET4_2` 有 3739 词，`PEPXiaoXue6_1` 只有 130 词。原实现固定 `limit=200`，
+导致 `CET4_2` 用户学到第 200 个时按钮就变成「完成本课」——**误导成学完整本**。
+
+**决策：首屏固定 50 条，接近末尾（剩 ≤5）时自动预取下一批。**
+
+- 按钮文案由 `hasMore` 决定：`hasMore=true` → 「下一个」；仅当真的没有下一批 → 「完成本课」
+- 游标用独立 `cursor` state，**不能**用 `cards[cards.length-1].wordRank` 推导：
+  若某批全是已见过的词，数组长度不变，用数组尾推导游标会永远停在原地 → 死循环
+- 越界保护：已到当前批末张但下一批还在加载中时，按钮进「加载中」禁用态，
+  不能让 index 越出数组（否则 `card` 为 undefined，页面整块变白）
+- 连续失败 3 次停止自动预取，交由用户手动重试
+
+分母「第 N / M 个」的 M 用 **`words` 表 `count(*)`** 而非 `books.wordCount`
+冗余字段 —— 冗余值与实际不一致时会让序号和「完成本课」出现错位。
+
+### 7.6.4 进入行为：统一续学
+
+`proposal.md` 5.5.1 与 `design.md` 7.5 对「从列表进入是否从头学」有冲突。
+**决策：两个入口统一续学**（`fromLast: true`），由进度表自己判断。
+`?from=last|start` 参数不引入 —— 传参反而让客户端有机会篡改起点。
+
+### 7.6.5 修复：最后一个单词永远不写明细
+
+原「完成本课」只调 `saveProgress`、漏调 `touchWordRecord`，导致
+`user_word_records` **永远少最后一条**。而 `learnedCount` 是从明细表实时
+聚合的，于是「已学 X / Y」的 X 恒等于实际词数 − 1，整本书的最后一个词
+永远没有学习记录。
+
+修复：新增 `progress-repo.ts` 的 `finishLesson()`，把「记明细 + 写进度」
+放进**同一个事务**（touch 成功而 save 失败会多一条明细；反之则进度指向
+一个没有明细的词）。学习页改调 `finishLessonAction`。
+
+### 7.6.6 验证
+
+| 层级 | 命令 | 覆盖 |
+| --- | --- | --- |
+| 数据层 | `npm run test:repos` | 29 项：仓储 + `finishLesson` + 服务层 + 音标规范化（直连真库） |
+| 端到端 | `npm run test:e2e` | 63 项：真实 HTTP + 真实 session + 真库数据（需先 `next start`） |
+| 静态 | `npm run typecheck` / `npm run lint` / `npm run build` | 全部通过 |
+
+> E2E 断言中文文案前必须 `deComment()` 剥掉 React SSR 插入的 `<!-- -->`：
+> `第 {1} / {130} 个` 实际渲染成 `第<!-- -->1<!-- --> / <!-- -->130<!-- --> 个`。
 
 ---
 

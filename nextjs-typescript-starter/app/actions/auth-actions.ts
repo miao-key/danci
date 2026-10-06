@@ -19,6 +19,7 @@ import {
   EmailAlreadyExistsError,
   hashPassword,
 } from '@/lib/user-repo';
+import { isNextControlFlowError } from '@/lib/next-redirect';
 
 export interface AuthState {
   error?: string;
@@ -52,9 +53,11 @@ export async function loginAction(
   try {
     await signIn('credentials', { email, password, redirectTo: '/' });
     return {};
-  } catch {
-    // NextAuth v5 credentials 校验失败时抛 AuthError，
-    // 而登录成功时抛 NEXT_REDIRECT —— 两者都要在 useFormState 里被 catch。
+  } catch (err) {
+    // 关键：signIn 成功时会**主动 throw NEXT_REDIRECT** 让框架完成跳转。
+    // 必须识别并重抛，否则浏览器看不到 303 重定向，会停留原页。
+    // NextAuth 校验失败时抛 AuthError（无 digest），归到「凭据错」分支。
+    if (isNextControlFlowError(err)) throw err;
     return { error: '邮箱或密码不正确' };
   }
 }
@@ -79,10 +82,27 @@ export async function registerAction(
     await signIn('credentials', { email, password, redirectTo: '/' });
     return {};
   } catch (err) {
+    // 1) 框架控制流（signIn 成功 throw NEXT_REDIRECT）→ 必须重抛
+    if (isNextControlFlowError(err)) throw err;
+
+    // 2) 邮箱已被注册 → 走「已存在则按密码直接登录」幂等路径，
+    //    避免「注册失败但 DB 有记录、用户反复重试」的死循环。
     if (err instanceof EmailAlreadyExistsError) {
-      return { fieldErrors: { email: '该邮箱已注册，请直接登录' } };
+      try {
+        await signIn('credentials', { email, password, redirectTo: '/' });
+        return {}; // unreachable: signIn 成功会 throw NEXT_REDIRECT
+      } catch (signInErr) {
+        if (isNextControlFlowError(signInErr)) throw signInErr;
+        // 邮箱存在但密码不对 → 提示「去登录」（不暴露用户枚举）
+        console.warn(
+          '[registerAction] email already exists but login failed',
+          email,
+        );
+        return { fieldErrors: { email: '该邮箱已注册，请直接登录' } };
+      }
     }
-    console.error('[registerAction]', err);
+
+    console.error('[registerAction] unexpected error', err);
     return { error: '注册失败，请稍后再试' };
   }
 }

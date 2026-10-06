@@ -11,7 +11,7 @@
 'use server';
 
 import { currentUser } from '@/lib/auth';
-import { saveProgress, touchWordRecord } from '@/lib/progress-repo';
+import { finishLesson, saveProgress, touchWordRecord } from '@/lib/progress-repo';
 
 /** 点「下一个」时记录当前单词已学。 */
 export async function touchWordAction(formData: FormData): Promise<void> {
@@ -42,6 +42,29 @@ export async function saveProgressAction(formData: FormData): Promise<void> {
   if (!bookId || !lastWordId) throw new Error('BAD_REQUEST');
 
   await saveProgress({
+    userId: user.id, // ← 来自 session，不是 formData
+    bookId,
+    lastWordId,
+    lastWordRank: rankRaw ? Number(rankRaw) : null,
+  });
+}
+
+/**
+ * 点「完成本课」时调用：把**最后一个单词**也记入明细，再写回进度。
+ *
+ * ⚠️ 必须用这个而不是 saveProgressAction —— 后者不写明细，会让
+ *    user_word_records 永远少最后一条（详见 lib/progress-repo.ts 的 finishLesson 注释）。
+ */
+export async function finishLessonAction(formData: FormData): Promise<void> {
+  const user = await currentUser();
+  if (!user) throw new Error('UNAUTHORIZED');
+
+  const bookId = String(formData.get('bookId') ?? '');
+  const lastWordId = String(formData.get('lastWordId') ?? '');
+  const rankRaw = String(formData.get('lastWordRank') ?? '');
+  if (!bookId || !lastWordId) throw new Error('BAD_REQUEST');
+
+  await finishLesson({
     userId: user.id, // ← 来自 session，不是 formData
     bookId,
     lastWordId,

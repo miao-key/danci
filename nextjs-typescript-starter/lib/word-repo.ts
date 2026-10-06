@@ -12,7 +12,7 @@
 import { db } from '@/db';
 import { books, words } from '@/db/schema';
 import { and, asc, eq, sql } from 'drizzle-orm';
-import { parseWordContent, type ParsedWord } from './word-content';
+import { normalizePhonetic, parseWordContent, type ParsedWord } from './word-content';
 
 export interface BookListItem {
   bookId: string;
@@ -146,10 +146,29 @@ export async function listStudyCards(
     bizWordId: r.bizWordId ?? String(r.wordId),
     wordRank: Number(r.wordRank),
     headWord: r.headWord ?? r.bizWordId ?? '',
-    usphone: r.usphone,
-    ukphone: r.ukphone,
+    // 音标同样要规范化：SQL 层原样取出的 `'`、`,`、`;` 直接渲染会很脏。
+    // 详见 lib/word-content.ts 的 normalizePhonetic 注释（别 strip 掉重音符）。
+    usphone: normalizePhonetic(r.usphone),
+    ukphone: normalizePhonetic(r.ukphone),
     firstTranCn: r.firstTranCn,
   }));
+}
+
+/**
+ * 统计某本书**实际**的单词数。
+ *
+ * ## 为什么不能只信 books.wordCount
+ *
+ * `books.wordCount` 是后台维护的冗余字段，可能与 `words` 表实际行数不一致
+ * （漏导入、删书残留、手工改过）。学习页要据此判断「是不是真的学完了」，
+ * 一旦冗余值偏大就会出现「词已学完但仍有剩余」或反之的空状态，
+ * 所以这里以 `words` 表的 count(*) 为准。
+ */
+export async function countWordsInBook(bookId: string): Promise<number> {
+  const rows = (await db.execute(sql`
+    SELECT count(*)::text AS value FROM "words" WHERE "bookId" = ${bookId}
+  `)) as unknown as { value: string }[];
+  return Number(rows[0]?.value ?? 0);
 }
 
 /**

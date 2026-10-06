@@ -47,14 +47,26 @@ function getDb(): DrizzleDb {
     postgres(connectionString, {
       // PgBouncer 事务模式必需
       prepare: false,
-      // Serverless 场景严格控制连接数：max 越小，池排队越快失败而不是耗尽
-      max: 2,
-      // lambda 闲置时立刻释放回 pool
-      idle_timeout: 5,
-      // 连接生命周期 <= 30s，强制回收，避免 PgBouncer session 模式锁住
-      max_lifetime: 30,
+      // dev + serverless 兼容：dev 并发少，serverless 多了会快速 fail-fast。
+      // 2 太紧、跟浏览器 long-poll 撞就 Connection closed。
+      max: 4,
+      // 浏览器发呆 & RSC 流式响应时不要被服务端掐 socket
+      idle_timeout: 20,
+      // 长查询保护：60s 远小于 Neon free 池的 socket 闲置上限
+      max_lifetime: 60,
       // Supabase pooler（事务模式）要求 SSL；直连也兼容
       ssl: "require",
+      // 握手兜底 + TCP keepalive，防中间 NLB 5min RST
+      connection: {
+        connect_timeout: 10,
+        keepAlive: true,
+        // 关键 —— 关掉驱动默认 statement_timeout。
+        // Neon / Supabase Pooler 强制 10s，长查询 / RSC 流式响应会被
+        // SIGTERM → Next dev 报 "Connection closed"。
+        // 业务层要限速请自己在 Service 里 `SET statement_timeout`。
+        statement_timeout: 0,
+      },
+      onnotice: () => {},
     });
 
   const db = drizzle(client);

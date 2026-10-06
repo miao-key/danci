@@ -9,6 +9,25 @@ import { NextAuthConfig } from 'next-auth';
 const PROTECTED_PREFIXES = ['/study', '/word'];
 
 /**
+ * 是否信任请求的 host。
+ *
+ * ⚠️ 关键：本地 dev / 局域网测试时 request host 是 `localhost:3000` 这种
+ * NextAuth 默认不信的 host（[auth][error] UntrustedHost）。
+ * 在 authConfig 里开 trustHost 同时影响两处：
+ *   - middleware.ts 里的 NextAuth 实例
+ *   - app/auth.ts 里的 NextAuth 实例
+ * 只在 app/auth.ts 里开会有 split-brain：middleware 不信任但 signIn 信任，
+ * 行为不一致。
+ *
+ * 默认开 trustHost=true（覆盖本地 / 局域网 / 任何非 Vercel 部署）。
+ * 若部署到 Vercel 官方环境，会自动配置 trustHost；自托管反向代理环境下
+ * 需通过 env `AUTH_TRUST_HOST=false` 显式关闭以使用代理头部。
+ *
+ * ref: https://errors.authjs.dev#untrustedhost
+ */
+const trustHost = process.env.AUTH_TRUST_HOST !== 'false';
+
+/**
  * 鉴权配置（同时被 middleware.ts 与 app/auth.ts 复用）。
  *
  * ## 为什么删掉了原来的全局重定向
@@ -24,6 +43,7 @@ const PROTECTED_PREFIXES = ['/study', '/word'];
  * 致命级）。改为白名单保护：只拦真正需要登录的路由，其余一律放行。
  */
 export const authConfig = {
+  trustHost,
   pages: {
     signIn: '/login',
   },

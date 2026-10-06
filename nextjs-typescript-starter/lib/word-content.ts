@@ -155,8 +155,10 @@ export function parseWordContent(
   return {
     wordId: w.wordId,
     wordHead: str(w.wordHead) ?? str(fallbackHead) ?? w.wordId,
-    usphone: str(c?.usphone),
-    ukphone: str(c?.ukphone),
+    // 音标必须过 normalizePhonetic —— 源数据含 `'`、`,`、`;` 等脏字符，
+    // 直接渲染会出现 /'saɪəns/、/,saɪkə'lɑdʒɪkl/ 这种脏音标（见该函数注释）
+    usphone: normalizePhonetic(c?.usphone),
+    ukphone: normalizePhonetic(c?.ukphone),
     usspeech: str(c?.usspeech),
     ukspeech: str(c?.ukspeech),
     trans: asArray(c?.trans)
@@ -188,6 +190,54 @@ export function parseWordContent(
       }))
       .filter((r) => r.words.length > 0),
   };
+}
+
+/* ========================================================================== *
+ * 4. 音标规范化
+ * ========================================================================== */
+
+/**
+ * 源数据的音标字段**不能直接渲染**，有 4 类脏数据（已在真库 3869 条上核实）：
+ *
+ * | 问题 | 实例 | 处理 |
+ * | --- | --- | --- |
+ * | 1. 用 ASCII `'` 代替 IPA 重音符 `ˈ` | `'saɪəns` | 换成 `ˈ` |
+ * | 2. 开头/中间混入逗号 | `,saɪkə'lɑdʒɪkl` | 去掉 |
+ * | 3. 多音节用 `;` 串接 | `æbˈsɔrb; æbˈzɔrb` | 取第一个（常用音） |
+ * | 4. 已混用标准 `ˈ`，两种写法并存 | 180 行是 `ˈ`，2468 行是 `'` | 统一 |
+ *
+ * ## ⚠️ 千万别把 `'` 直接删掉
+ *
+ * 实测 `'` **位置有意义**，它是音节重音符：
+ * `ə'bændən`(abandon)、`dɪ'lɪʃəs`(delicious)、`ovɚ'kʌm`(overcome)。
+ * strip 掉会丢失重音信息，词就教错了。正确形式是 `əˈbændən`。
+ *
+ * 另外 `;` 后可能出现残缺形式（`ˈæksɛnt; -sent`），取第一段即可。
+ *
+ * @param raw 数据库里的 usphone / ukphone 原值
+ * @returns 规范化后的音标（不含首尾斜杠，UI 侧自行补）；无有效内容返回 null
+ */
+export function normalizePhonetic(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+
+  // 3. 多音节只取第一段（且要求这一段非空）
+  const first = raw.split(';')[0];
+  if (!first) return null;
+
+  // 1 + 4. ASCII 单引号 → IPA 重音符 ˈ (U+02C8)
+  //      源数据里 ' 只用作重音符，不承担分音符职责（英语没有分音符）
+  let out = first.replace(/'/g, '\u02C8');
+
+  // 2. 去掉残留的逗号（可能是英文逗号或全角逗号），也顺带清掉反引号
+  out = out.replace(/[,\uFF0C`]/g, '');
+
+  // 清理空白：去掉首尾空格，并把内部连续空格压成一个
+  out = out.replace(/\s+/g, ' ').trim();
+
+  // 去掉 `ˈˈ` 这类被重复规范化产生的叠写
+  out = out.replace(/\u02C8{2,}/g, '\u02C8');
+
+  return out.length > 0 ? out : null;
 }
 
 /**

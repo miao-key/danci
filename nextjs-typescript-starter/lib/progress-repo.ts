@@ -136,6 +136,89 @@ export async function saveProgress(input: {
 }
 
 /**
+ * 完成本课：把**最后一个单词**记入明细，并写回进度。
+ *
+ * ## 为什么单独抽一个函数（修复「最后一个词永远不写明细」的 Bug）
+ *
+ * 原先学习页的「完成本课」只调 `saveProgress`，没调 `touchWordRecord`，
+ * 于是每学完一课，`user_word_records` 就**永远少最后一条**。而
+ * `saveProgress` 的 learnedCount 是从明细表实时聚合的，所以：
+ *   - 「已学 X / Y」的 X 永远等于实际学的词数 - 1；
+ *   - 整本书的最后一个词在任何时候都没有学习记录。
+ *
+ * 两者必须**放在同一个事务**里：若 touch 成功而 save 失败，明细会多出一条；
+ * 反之则进度里的 lastWordId 指向一个没有明细的词。
+ */
+export async function finishLesson(input: {
+  userId: string;
+  bookId: string;
+  /** words.id 主键（字符串形式） */
+  lastWordId: string;
+  lastWordRank: number | null;
+}): Promise<void> {
+  const wordId = Number(input.lastWordId);
+
+  await db.transaction(async (tx) => {
+    const now = new Date();
+
+    // 1. 先记明细：与 touchWordRecord 同构，只是复用同一个 tx
+    await tx
+      .insert(userWordRecords)
+      .values({
+        id: `uwr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        userId: input.userId,
+        wordId,
+        bookId: input.bookId,
+        wordRank: input.lastWordRank,
+        status: 'learning',
+        studyCount: 1,
+        lastStudiedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [userWordRecords.userId, userWordRecords.wordId],
+        set: {
+          studyCount: sql`${userWordRecords.studyCount} + 1`,
+          lastStudiedAt: now,
+          updatedAt: now,
+        },
+      });
+
+    // 2. 再写进度，learnedCount 从刚写入的明细实时聚合
+    const counted = (await tx.execute(sql`
+      SELECT count(*)::text AS value FROM "user_word_records"
+      WHERE "userId" = ${input.userId} AND "bookId" = ${input.bookId}
+    `)) as unknown as { value: string }[];
+    const learnedCount = Number(counted[0]?.value ?? 0);
+
+    await tx
+      .insert(userBookProgress)
+      .values({
+        id: `ubp-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        userId: input.userId,
+        bookId: input.bookId,
+        lastWordId: wordId,
+        lastWordRank: input.lastWordRank,
+        learnedCount,
+        lastStudiedAt: now,
+        createdAt: now,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: [userBookProgress.userId, userBookProgress.bookId],
+        set: {
+          lastWordId: wordId,
+          lastWordRank: input.lastWordRank,
+          learnedCount,
+          lastStudiedAt: now,
+          updatedAt: now,
+        },
+      });
+  });
+}
+
+/**
  * 记录单词明细。v1 每次点「下一个」调一次。
  *
  * 学完之后同步刷新 user_book_progress.learnedCount ——

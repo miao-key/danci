@@ -18,7 +18,7 @@ import { BookCover } from '@/components/book-cover';
 import { LogoutButton } from '@/components/logout-button';
 import { MeGuestPanel } from '@/components/me-guest-panel';
 import { currentUser } from '@/lib/auth';
-import { listProgress } from '@/lib/progress-repo';
+import { loadProgressList } from '@/lib/study-service';
 
 export default async function MePage() {
   const user = await currentUser();
@@ -30,7 +30,7 @@ export default async function MePage() {
   }
 
   // 书被后台删掉会留下孤儿进度（title 为 null），不展示
-  const progresses = (await listProgress(user.id)).filter(
+  const progresses = (await loadProgressList(user.id)).filter(
     (p) => p.title !== null,
   );
   const learnedBooks = progresses.length;
@@ -71,11 +71,7 @@ export default async function MePage() {
         ) : (
           <ul className="space-y-3">
             {progresses.map((p) => {
-              const total = p.wordCount || 1;
-              const percent = Math.min(
-                100,
-                Math.round((p.learnedCount / total) * 100),
-              );
+              // percent 已由 loadProgressList 算好并做了除零与 100% 上限保护
               return (
                 <li
                   key={p.bookId}
@@ -102,9 +98,9 @@ export default async function MePage() {
                   <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-slate-100">
                     <div
                       className="h-full rounded-full bg-brand-600"
-                      style={{ width: `${percent}%` }}
+                      style={{ width: `${p.percent}%` }}
                       role="progressbar"
-                      aria-valuenow={percent}
+                      aria-valuenow={p.percent}
                       aria-valuemin={0}
                       aria-valuemax={100}
                     />

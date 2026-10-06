@@ -3,6 +3,10 @@ import Credentials from 'next-auth/providers/credentials';
 import { authenticateUser } from '@/lib/user-repo';
 import { authConfig } from 'app/auth.config';
 
+// trustHost 在 authConfig 里已声明（同时影响 middleware 与此处），
+// 这里只追加只能在 Node 跑的 provider（bcrypt-ts 是 native module，
+// 不能 import 到 middleware / Edge runtime）。
+
 export const {
   handlers: { GET, POST },
   auth,

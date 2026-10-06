@@ -7,23 +7,60 @@
  * 序号、单词本体、音标、**一条**中文释义。
  * 例句 / 短语 / 近义词 / 同根词全部下沉到详情页（验收 A8）。
  *
- * ## 为什么切换是纯客户端
+ * ## 为什么要「边学边加载」
  *
- * 词卡列表由服务端一次算好传下来，切词只改本地 state，
- * 零网络请求 —— 满足 design.md 12.3「切换单词 < 100ms」。
+ * 单词书大小差异极大：`PEPXiaoXue6_1` 只有 130 词，`CET4_2` 有 3739 词。
+ * 首屏固定只带 50 张卡（见 app/study/[bookId]/page.tsx 的 BATCH_SIZE），
+ * 否则 3739 条词卡会一次性塞进 HTML。
+ *
+ * 剩下一批时按钮**不能**变成「完成本课」—— 否则用户学到第 50 个词
+ * 会被误导成学完了一整本。所以：
+ *   - 还有下一批 → 按钮仍叫「下一个」，并静默预取
+ *   - 真的没有下一批 → 才显示「完成本课」
+ *
+ * 预取在离末尾还有 5 张时触发，等用户点到那里数据已经就位，体验上
+ * 与无限滚动一致，且切词仍是纯本地 state（< 100ms，验收指标 12.3）。
+ *
+ * ## 三个必须注意的边界
+ *
+ * 1. **不能越界**：若已加载到末张但下一批还在加载中，此时点「下一个」
+ *    不能让 index 超出数组（否则 `card` 为 undefined，页面整块变白）。
+ *    所以按钮在这种情况下进入「加载中」禁用态。
+ * 2. **游标必须单调前进**：请求用独立的 `cursor` state 而非
+ *    `cards[cards.length-1].wordRank`。若某批全是已见过的词，
+ *    追加后数组长度不变，用数组尾推导游标会永远停在原地 → 死循环。
+ * 3. **连续失败 3 次即停止预取**并给出重试入口，避免无限重试打服务端。
  */
 'use client';
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useState, useTransition } from 'react';
-import { saveProgressAction, touchWordAction } from '@/app/actions/study-actions';
+import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
+import { finishLessonAction, touchWordAction } from '@/app/actions/study-actions';
 import type { StudyCard } from '@/lib/word-repo';
 
+/** 离末尾还有几张时开始预取下一批 */
+const PREFETCH_THRESHOLD = 5;
+/** 单批拉取条数，与服务端 BATCH_SIZE 保持一致 */
+const FETCH_BATCH = 50;
+/** 连续失败几次后放弃自动预取 */
+const MAX_RETRY = 3;
+
+interface CardsResponse {
+  data: {
+    cards: StudyCard[];
+    nextAfterRank: number;
+    hasMore: boolean;
+    wordCount: number;
+  } | null;
+  error?: { code: string; message: string };
+}
+
 export function WordCard({
-  cards,
+  cards: initialCards,
   startIndex,
   total,
+  hasMore: initialHasMore,
   bookId,
   bookTitle,
 }: {
@@ -32,47 +69,136 @@ export function WordCard({
   startIndex: number;
   /** 全书总词数，作为「第 N / M 个」的分母 */
   total: number;
+  /** 首屏这批之后是否还有词 */
+  hasMore: boolean;
   bookId: string;
   bookTitle: string;
 }) {
+  const [cards, setCards] = useState(initialCards);
+  const [hasMore, setHasMore] = useState(initialHasMore);
   const [i, setI] = useState(0);
+
+  /** 下一批的起点。独立于 cards 推导，保证单调前进（见文件头边界 2） */
+  const [cursor, setCursor] = useState(
+    initialCards.length > 0
+      ? initialCards[initialCards.length - 1].wordRank
+      : startIndex,
+  );
+
   const [isPending, startTransition] = useTransition();
   const [toast, setToast] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
   const router = useRouter();
 
+  /** 防止预取 effect 并发重复触发 */
+  const loadingRef = useRef(false);
+
   const card = cards[i];
-  const isLast = i === cards.length - 1;
+  const remaining = cards.length - i;
+  /** 还有词可学：下一批有词，或当前批后面还有卡 */
+  const canContinue = hasMore || remaining > 1;
+  /** 已到当前批末张、但下一批还没到位 —— 按钮进禁用态而非越界 */
+  const waitingForNextBatch = remaining <= 1 && hasMore;
+
+  /** 拉取下一批词卡并追加到本地列表 */
+  const loadMore = useCallback(async () => {
+    if (loadingRef.current) return;
+    loadingRef.current = true;
+    setIsLoadingMore(true);
+    setError(null);
+
+    try {
+      const url = `/api/study/${encodeURIComponent(bookId)}/cards?afterRank=${
+        cursor
+      }&limit=${FETCH_BATCH}`;
+
+      const res = await fetch(url, { credentials: 'include' });
+      const json = (await res.json()) as CardsResponse;
+
+      if (!res.ok || !json.data) {
+        setError(json.error?.message ?? '加载失败');
+        setRetryCount((n) => n + 1);
+        return;
+      }
+
+      const batch = json.data.cards;
+      // 游标无条件前进：即使这批全是重复词，nextAfterRank 也保证下次请求不同
+      setCursor(json.data.nextAfterRank);
+      setHasMore(json.data.hasMore);
+      setRetryCount(0);
+
+      if (batch.length === 0) {
+        // 服务端说没有却返回空 —— 视为到底了，防止预取 effect 反复触发
+        setHasMore(false);
+        return;
+      }
+
+      setCards((prev) => {
+        const seen = new Set(prev.map((c) => c.wordId));
+        const fresh = batch.filter((c) => !seen.has(c.wordId));
+        return fresh.length > 0 ? [...prev, ...fresh] : prev;
+      });
+    } catch {
+      setError('网络异常');
+      setRetryCount((n) => n + 1);
+    } finally {
+      loadingRef.current = false;
+      setIsLoadingMore(false);
+    }
+  }, [bookId, cursor]);
+
+  /** 接近末尾时预取下一批；连续失败超过上限则停止，交由用户手动重试 */
+  useEffect(() => {
+    if (hasMore && remaining <= PREFETCH_THRESHOLD && retryCount < MAX_RETRY) {
+      void loadMore();
+    }
+  }, [hasMore, remaining, retryCount, loadMore]);
 
   function handleNext() {
-    if (isLast) {
-      // 完成本课：写回进度 → 轻提示 → 回首页
+    if (!card) return;
+
+    // 末批学完 → 记录最后一个单词 + 写回进度
+    if (!canContinue) {
       const fd = new FormData();
       fd.set('bookId', bookId);
       fd.set('lastWordId', card.wordId);
       fd.set('lastWordRank', String(card.wordRank));
 
       startTransition(async () => {
-        await saveProgressAction(fd);
-        setToast(`已完成《${bookTitle}》本课学习`);
-        // 轻提示 2 秒后自动消失并回首页
-        setTimeout(() => {
-          router.push('/');
-          router.refresh();
-        }, 2000);
+        try {
+          // ⚠️ 用 finishLessonAction 而不是 saveProgressAction：
+          // 后者不写 user_word_records，会让明细永远少最后一个词。
+          await finishLessonAction(fd);
+          setToast(`已完成《${bookTitle}》本课学习`);
+          setTimeout(() => {
+            router.push('/');
+            router.refresh();
+          }, 1500);
+        } catch {
+          setError('保存进度失败，请重试');
+        }
       });
       return;
     }
 
-    // 非末尾：先记录当前单词已学，再切下一张
+    // 还有词：先记录当前单词已学，再切下一张
     const fd = new FormData();
     fd.set('wordId', card.wordId);
     fd.set('bookId', bookId);
     fd.set('wordRank', String(card.wordRank));
     startTransition(async () => {
-      await touchWordAction(fd);
+      try {
+        await touchWordAction(fd);
+      } catch {
+        setError('记录学习进度失败');
+      }
     });
     setI((v) => v + 1);
   }
+
+  if (!card) return null;
 
   return (
     <div className="flex flex-1 flex-col">
@@ -95,6 +221,23 @@ export function WordCard({
             {card.firstTranCn}
           </p>
         ) : null}
+
+        {waitingForNextBatch || isLoadingMore ? (
+          <p className="mt-8 text-xs text-slate-400">正在加载后续单词…</p>
+        ) : null}
+
+        {error ? (
+          <button
+            type="button"
+            onClick={() => {
+              setRetryCount(0);
+              void loadMore();
+            }}
+            className="mt-8 text-xs text-brand-600 underline"
+          >
+            {error}（点击重试）
+          </button>
+        ) : null}
       </div>
 
       {/* 双按钮 */}
@@ -108,10 +251,17 @@ export function WordCard({
         <button
           type="button"
           onClick={handleNext}
-          disabled={isPending}
+          // 越界保护：下一批没到位时不允许推进（见文件头边界 1）
+          disabled={isPending || (waitingForNextBatch && !isLoadingMore)}
           className="flex-1 rounded-xl bg-brand-600 py-3 text-sm font-medium text-white transition-colors active:bg-brand-700 disabled:opacity-60"
         >
-          {isPending ? '处理中…' : isLast ? '完成本课' : '下一个 ›'}
+          {isPending
+            ? '处理中…'
+            : waitingForNextBatch && !isLoadingMore
+              ? '加载中…'
+              : canContinue
+                ? '下一个 ›'
+                : '完成本课'}
         </button>
       </div>
 
