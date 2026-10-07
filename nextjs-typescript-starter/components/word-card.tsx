@@ -36,6 +36,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
+import { PronunciationButton } from '@/components/pronunciation-button';
 import { finishLessonAction, touchWordAction } from '@/app/actions/study-actions';
 import type { StudyCard } from '@/lib/word-repo';
 
@@ -252,6 +253,31 @@ export function WordCard({
 
         {card.usphone ? (
           <p className="mt-3 text-lg text-slate-500">/{card.usphone}/</p>
+        ) : null}
+
+        {/* 发音：US / UK 两个带文字标签的 chip 小按钮，命中 headWord 调有道
+            dictvoice。喇叭 + "US"/"UK" 文字一眼分清英美音。
+            任一音标缺失就整颗不渲染 —— 与"空数据整块不渲染" 一致。
+            卡片整体仍是极简风，只多两颗小 chip 按钮。 */}
+        {(card.usphone || card.ukphone) && card.headWord ? (
+          <div className="mt-4 flex items-center justify-center gap-2">
+            {card.usphone ? (
+              <PronunciationButton
+                word={card.headWord}
+                accent="us"
+                variant="icon"
+                sizeClass="h-8 px-3 text-[11px]"
+              />
+            ) : null}
+            {card.ukphone ? (
+              <PronunciationButton
+                word={card.headWord}
+                accent="uk"
+                variant="icon"
+                sizeClass="h-8 px-3 text-[11px]"
+              />
+            ) : null}
+          </div>
         ) : null}
 
         {card.firstTranCn ? (

@@ -6,7 +6,8 @@
  *
  * 音标行按需求 6.7 线框图展示美/英两个音标：
  *   源数据里 usphone/ukphone 都不带首尾斜杠，这里补上 `/`。
- * 「▶ US / ▶ UK」是本期占位，音频资源接入后再接 <audio>（需求 1.3 非目标）。
+ * 发音走 components/pronunciation-button.tsx，调用有道
+ * `dictvoice?audio={word}&type=1|2`（type=1 英音，type=2 美音）。
  *
  * ## 「返回」定位（修复「详情页返回后回到第 1 个」Bug）
  *
@@ -19,6 +20,7 @@
  *   按 user_book_progress 续学；适用于从「我的」页直接进来的场景。
  */
 import { notFound } from 'next/navigation';
+import { PronunciationButton } from '@/components/pronunciation-button';
 import { WordDetailSections } from '@/components/word-detail-sections';
 import { findWordDetail } from '@/lib/word-repo';
 
@@ -81,7 +83,7 @@ export default async function WordDetailPage({
           返回
         </a>
 
-        {/* 词头区：单词 + 音标 + 发音占位 */}
+        {/* 词头区：单词 + 音标 + 发音入口（US/UK 各一颗小喇叭） */}
         <header className="mt-6 flex items-start justify-between gap-4">
           <div className="min-w-0">
             <h1 className="break-words text-3xl font-semibold tracking-tight text-slate-900">
@@ -95,24 +97,16 @@ export default async function WordDetailPage({
             ) : null}
           </div>
 
-          {/* 发音入口：v1 占位，音频资源接入后接 <audio> */}
+          {/* 发音入口：US/UK 各一个，命中 headWord 后调有道 dictvoice。
+              任一音标缺失就只渲染对应按钮（不补空 chip 占位 —— 与
+              "空数据整块不渲染" 的规范一致）。 */}
           <div className="flex shrink-0 gap-2">
-            <button
-              type="button"
-              disabled
-              title="发音功能待接入"
-              className="rounded-full border border-slate-200 px-3 py-1 text-[11px] text-slate-400"
-            >
-              ▶ US
-            </button>
-            <button
-              type="button"
-              disabled
-              title="发音功能待接入"
-              className="rounded-full border border-slate-200 px-3 py-1 text-[11px] text-slate-400"
-            >
-              ▶ UK
-            </button>
+            {word.usphone ? (
+              <PronunciationButton word={word.wordHead} accent="us" />
+            ) : null}
+            {word.ukphone ? (
+              <PronunciationButton word={word.wordHead} accent="uk" />
+            ) : null}
           </div>
         </header>
       </div>

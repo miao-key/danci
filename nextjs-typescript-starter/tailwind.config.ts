@@ -29,6 +29,17 @@ export default {
         // 移动端优先：所有页面按 375px 设计，桌面端居中显示不拉伸
         app: '28rem', // 448px
       },
+      keyframes: {
+        // 发音图标在 playing 状态下的"跳动"动画 —— 比 pulse 更夸张，
+        // 模拟声波扩散。
+        'pulse-speak': {
+          '0%, 100%': { transform: 'scale(1)', opacity: '1' },
+          '50%': { transform: 'scale(1.18)', opacity: '0.85' },
+        },
+      },
+      animation: {
+        'pulse-speak': 'pulse-speak 0.9s ease-in-out infinite',
+      },
     },
   },
   future: {

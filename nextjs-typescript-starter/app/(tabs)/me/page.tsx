@@ -91,7 +91,7 @@ export default async function MePage() {
                       href={`/study/${p.bookId}`}
                       className="shrink-0 text-xs font-medium text-brand-600"
                     >
-                      继续学习 →
+                      继续学习
                     </Link>
                   </div>
 
