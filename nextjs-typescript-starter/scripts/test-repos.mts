@@ -305,6 +305,43 @@ await t('重复 touch 同一单词 → studyCount 累加，不重复计数', asy
   assert.equal(rec?.studyCount, 2, 'studyCount 应为 2');
 });
 
+await t('touchWordRecord 同步写 user_book_progress（修复「学完不更新 lastWordRank」Bug）', async () => {
+  // 上一组 touch 已把 UID 在 PEPXiaoXue6_1 上的 lastWordRank 推到 3
+  const p = await findProgress(UID, 'PEPXiaoXue6_1');
+  assert.ok(p, 'touch 后应已有进度行');
+  assert.equal(p!.lastWordRank, 3, 'lastWordRank 应等于最后 touch 的 rank');
+  assert.equal(p!.lastWordId, '10159', 'lastWordId 应等于最后 touch 的 wordId');
+  assert.equal(p!.learnedCount, 3, 'learnedCount 与明细一致');
+});
+
+await t('touchWordRecord rank=null 时不建/不改进度行（防御性）', async () => {
+  // 用一个新用户避免污染上一组
+  const UID_NULL = `usr-test-${Date.now().toString(36)}-null`;
+  await db.insert(users).values({
+    id: UID_NULL,
+    email: `${UID_NULL}@test.local`,
+    passwordHash: hashSync('x', 10),
+    displayName: 'repo-test-null',
+  });
+  try {
+    await touchWordRecord({
+      userId: UID_NULL,
+      wordId: '10157',
+      bookId: 'PEPXiaoXue6_1',
+      wordRank: null, // 漏传 / 0 / null
+    });
+    assert.equal(
+      await findProgress(UID_NULL, 'PEPXiaoXue6_1'),
+      null,
+      'rank 非法时不应建进度行，避免「第 0 个」',
+    );
+    // 但明细仍然要写（保持旧行为：永远记）
+    assert.equal(await countStudiedInBook(UID_NULL, 'PEPXiaoXue6_1'), 1);
+  } finally {
+    await db.delete(users).where(eq(users.id, UID_NULL));
+  }
+});
+
 await t('saveProgress upsert：同一 (user, book) 只有 1 行', async () => {
   await saveProgress({ userId: UID, bookId: 'PEPXiaoXue6_1', lastWordId: '10159', lastWordRank: 3 });
   await saveProgress({ userId: UID, bookId: 'PEPXiaoXue6_1', lastWordId: '10163', lastWordRank: 7 });

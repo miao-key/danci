@@ -59,6 +59,7 @@ interface CardsResponse {
 export function WordCard({
   cards: initialCards,
   startIndex,
+  initialIndex,
   total,
   hasMore: initialHasMore,
   bookId,
@@ -67,6 +68,19 @@ export function WordCard({
   cards: StudyCard[];
   /** 第 1 张卡在全书中的序号偏移（= 已学过的数量） */
   startIndex: number;
+  /**
+   * 起始 i（默认 0）。
+   *
+   * 服务端在两种场景下会刻意把 cards[0] 设为「上一张卡」：
+   *   - `?at=N` 从详情页回来，且 N > 1（用户在书的中间）
+   *   - `fromLast` 续学，且 lastWordRank > 0（用户已经学了一些）
+   * 此时 cards[1] 才是「用户真正要看的那张」，服务端把
+   * `initialIndex` 显式传成 1，保证进站即看到原卡，同时
+   * 「上一个」按钮立刻可见可点（点完回退到 cards[0] = 上一张）。
+   *
+   * 首进或 `?at=1` 时传 0，沿用旧行为。
+   */
+  initialIndex?: number;
   /** 全书总词数，作为「第 N / M 个」的分母 */
   total: number;
   /** 首屏这批之后是否还有词 */
@@ -76,7 +90,11 @@ export function WordCard({
 }) {
   const [cards, setCards] = useState(initialCards);
   const [hasMore, setHasMore] = useState(initialHasMore);
-  const [i, setI] = useState(0);
+  const [i, setI] = useState(() => {
+    if (initialCards.length === 0) return 0;
+    if (typeof initialIndex === 'number') return initialIndex;
+    return 0;
+  });
 
   /** 下一批的起点。独立于 cards 推导，保证单调前进（见文件头边界 2） */
   const [cursor, setCursor] = useState(
@@ -101,6 +119,10 @@ export function WordCard({
   const canContinue = hasMore || remaining > 1;
   /** 已到当前批末张、但下一批还没到位 —— 按钮进禁用态而非越界 */
   const waitingForNextBatch = remaining <= 1 && hasMore;
+  /** 「上一个」可见性：i > 0（不是当前批首张） */
+  const hasPrev = i > 0;
+  /** 「下一个」可见性：与 canContinue 同义 —— 还能往后学 */
+  const hasNext = canContinue;
 
   /** 拉取下一批词卡并追加到本地列表 */
   const loadMore = useCallback(async () => {
@@ -198,6 +220,22 @@ export function WordCard({
     setI((v) => v + 1);
   }
 
+  /**
+   * 「上一个」：纯本地回退，不发请求也不写进度。
+   *
+   * 设计取舍：
+   *   - 当前卡 N 是「点过 N 的 下一个」之后才进的，所以 N 一定已经
+   *     touch 过了，回退到 N-1 不需要回滚 user_word_records。
+   *   - 但有一种边缘情况：用户从未点过「下一个」、直接点「查看详情」
+   *     再回到学习页，此时 i=0，按钮根本不会渲染（见下方 hasPrev）。
+   *   - 因此 handlePrev 只动 i，不碰服务端，UI 状态自洽。
+   */
+  function handlePrev() {
+    if (i <= 0) return;
+    setI((v) => v - 1);
+    setError(null);
+  }
+
   if (!card) return null;
 
   return (
@@ -240,29 +278,53 @@ export function WordCard({
         ) : null}
       </div>
 
-      {/* 双按钮 */}
+      {/* 三按钮：上一个 / 查看详情 / 下一个（首末两端的按钮会随上下文隐藏） */}
       <div className="flex gap-3 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-8">
+        {hasPrev ? (
+          <button
+            type="button"
+            onClick={handlePrev}
+            // 仅本地状态变更，不发请求，所以无需 isPending 禁用。
+            // 预取仍在后台跑（见 useEffect），即使有 in-flight 也只是
+            // 拉下一批词卡，不影响回退。
+            className="flex-1 rounded-xl border border-slate-200 bg-white py-3 text-center text-sm text-slate-600 transition-colors active:bg-slate-50"
+          >
+            上一个
+          </button>
+        ) : null}
+
         <Link
-          href={`/word/${bookId}/${card.bizWordId}`}
+          // ?from=wordRank 让详情页的「返回」能精准回到这张卡，
+          // 而不是 lastWordRank 指示的位置（两者可能差 1：
+          // 用户可能没点过「下一个」就进了详情页）。
+          href={`/word/${bookId}/${card.bizWordId}?from=${card.wordRank}`}
           className="flex-1 rounded-xl border border-slate-200 bg-white py-3 text-center text-sm text-slate-600 transition-colors active:bg-slate-50"
         >
           查看详情
         </Link>
-        <button
-          type="button"
-          onClick={handleNext}
-          // 越界保护：下一批没到位时不允许推进（见文件头边界 1）
-          disabled={isPending || (waitingForNextBatch && !isLoadingMore)}
-          className="flex-1 rounded-xl bg-brand-600 py-3 text-sm font-medium text-white transition-colors active:bg-brand-700 disabled:opacity-60"
-        >
-          {isPending
-            ? '处理中…'
-            : waitingForNextBatch && !isLoadingMore
-              ? '加载中…'
-              : canContinue
-                ? '下一个 ›'
-                : '完成本课'}
-        </button>
+
+        {hasNext ? (
+          <button
+            type="button"
+            onClick={handleNext}
+            // 越界保护：下一批没到位时不允许推进（见文件头边界 1）
+            disabled={isPending || (waitingForNextBatch && !isLoadingMore)}
+            className="flex-1 rounded-xl bg-brand-600 py-3 text-sm font-medium text-white transition-colors active:bg-brand-700 disabled:opacity-60"
+          >
+            {isPending ? '处理中…' : waitingForNextBatch && !isLoadingMore ? '加载中…' : '下一个'}
+          </button>
+        ) : (
+          // 末张卡：没有「下一个」，换成「完成本课」。
+          // 用与「下一个」相同的 primary 样式，保持视觉权重一致。
+          <button
+            type="button"
+            onClick={handleNext}
+            disabled={isPending}
+            className="flex-1 rounded-xl bg-brand-600 py-3 text-sm font-medium text-white transition-colors active:bg-brand-700 disabled:opacity-60"
+          >
+            {isPending ? '处理中…' : '完成本课'}
+          </button>
+        )}
       </div>
 
       {/* 完成轻提示 */}

@@ -308,6 +308,10 @@ async function run(email: string, password: string) {
   check(h1.includes('science'), 'study page renders first word');
   check(h1.includes('第 1 / 130 个'), 'progress denominator = 130 (words table, not redunant)', h1.slice(0, 0));
   check(h1.includes('下一个'), 'button says "next" (hasMore, not finished)');
+  check(!h1.includes('下一个 ›'), 'next button has no trailing chevron (UI 2.x)');
+  check(h1.includes('查看详情'), 'button "查看详情" rendered');
+  // 第一张卡：没有「上一个」按钮
+  check(!h1.includes('>上一个<'), 'first card does NOT render 上一个 button');
   check(!h1.includes('完成本课'), 'does NOT say "finish lesson" prematurely');
   check(h1.includes('ˈsaɪəns'), 'phonetic rendered normalized');
 
@@ -350,7 +354,7 @@ async function run(email: string, password: string) {
 
   r = await req('/');
   check(r.text.includes(RECENT), 'home NOW shows "recent study" block');
-  check(deComment(r.text).includes('\u4e0a\u6b21\u5b66\u5230\uff1a\u7b2c 3 \u4e2a\u5355\u8bcd \u00b7 \u5171 130 \u4e2a'), 'shows "last studied at word 3 of 130" copy');
+  check(deComment(r.text).includes('\u4e0a\u6b21\u5b66\u5230\uff1a\u7b2c 4 \u4e2a\u5355\u8bcd \u00b7 \u5171 130 \u4e2a'), 'shows "last studied at word 4 of 130" copy (续学起点 = lastWordRank+1)');
 
   // 续学：从第 4 个开始
   r = await req('/api/study/PEPXiaoXue6_1/cards?from=last&limit=5');
@@ -368,6 +372,144 @@ async function run(email: string, password: string) {
   check(hm.includes(email), 'me page shows email');
   check(hm.includes('已学 3 / 130'), 'me page shows "learned 3 / 130"', 'look for 已学 3 / 130');
   check(hm.includes('aria-valuenow="2"'), 'me page progress bar = 2%');
+
+  /* ---------- 修复：touch 推进 lastWordRank + ?at= 精准定位 ---------- */
+  console.log('\n[resume: touch advances lastWordRank + ?at= positions]');
+
+  // 新建第二个测试账号，避免污染上面 lastWordRank=3 的状态
+  const email2 = `e2e-resume-${Date.now()}@test.local`;
+  const pwd2 = 'e2epassword123';
+  const uid2 = `usr-e2e-${Date.now().toString(36)}-r`;
+  await sql`INSERT INTO "users" ("id","email","passwordHash")
+            VALUES (${uid2}, ${email2}, ${hashSync(password, 10)})`;
+
+  // 用新的 cookie jar 登录第二个账号
+  const jar2 = new Map<string, string>();
+  const cookieHeader2 = () =>
+    [...jar2.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
+  const storeCookies2 = (res: Response) => {
+    const raw = res.headers.getSetCookie?.() ?? [];
+    for (const line of raw) {
+      const [pair] = line.split(';');
+      const idx = pair.indexOf('=');
+      if (idx > 0)
+        jar2.set(pair.slice(0, idx).trim(), pair.slice(idx + 1).trim());
+    }
+  };
+  const req2 = async (path: string, init: RequestInit = {}) => {
+    const res = await fetch(`${BASE}${path}`, {
+      ...init,
+      redirect: 'manual',
+      headers: { ...(init.headers ?? {}), Cookie: cookieHeader2() },
+    });
+    storeCookies2(res);
+    return { status: res.status, text: await res.text() };
+  };
+  let r2 = await req2('/api/auth/csrf');
+  const csrf2 = (JSON.parse(r2.text) as { csrfToken: string }).csrfToken;
+  await req2('/api/auth/callback/credentials', {
+    method: 'POST',
+    body: new URLSearchParams({
+      csrfToken: csrf2,
+      email: email2,
+      password: pwd2,
+      callbackUrl: `${BASE}/`,
+    }).toString(),
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  });
+  check(jar2.has('authjs.session-token'), 'second test user logged in');
+
+  // 两次 touch 后 lastWordRank 立刻被推到 2（不再卡 0）
+  await touchWordRecord({
+    userId: uid2,
+    wordId: '10157',
+    bookId: 'PEPXiaoXue6_1',
+    wordRank: 1,
+  });
+  await touchWordRecord({
+    userId: uid2,
+    wordId: '10158',
+    bookId: 'PEPXiaoXue6_1',
+    wordRank: 2,
+  });
+  const p2 = await findProgress(uid2, 'PEPXiaoXue6_1');
+  check(
+    p2?.lastWordRank === 2,
+    '两次 touch 后 lastWordRank = 2（不再卡 0）',
+    `got ${p2?.lastWordRank}`,
+  );
+  check(p2?.learnedCount === 2, 'learnedCount = 2', `got ${p2?.learnedCount}`);
+
+  // from=last 应直接续学到第 3 个
+  r2 = await req2('/api/study/PEPXiaoXue6_1/cards?from=last&limit=5');
+  const j10 = JSON.parse(r2.text) as typeof j1;
+  check(
+    j10.data.afterRank === 2,
+    'from=last 续学：afterRank=2',
+    `got ${j10.data.afterRank}`,
+  );
+  check(
+    j10.data.cards[0].wordRank === 3,
+    'cards[0].wordRank = 3',
+    `got ${j10.data.cards[0].wordRank}`,
+  );
+
+  // ?at=N 精准定位：跳到第 7 个
+  r2 = await req2('/study/PEPXiaoXue6_1?at=7');
+  check(r2.status === 200, 'GET /study/PEPXiaoXue6_1?at=7 -> 200', `got ${r2.status}`);
+  check(
+    deComment(r2.text).includes('第 7 / 130 个'),
+    '?at=7 把当前卡片定位到第 7 个',
+  );
+
+  // ?at 非法值回退到 fromLast
+  r2 = await req2('/study/PEPXiaoXue6_1?at=0');
+  check(
+    deComment(r2.text).includes('第 3 / 130 个'),
+    '?at=0 回退到 fromLast（续学到第 3）',
+  );
+  r2 = await req2('/study/PEPXiaoXue6_1?at=999999');
+  check(
+    deComment(r2.text).includes('第 3 / 130 个'),
+    '?at=超大值回退到 fromLast',
+  );
+
+  // ?at=7 详情页定位后，「上一个」必须可见可点
+  // 否则用户回到详情再返回时按钮消失，违背 proposal 5.5.2
+  // 「上一个 / 查看详情 / 下一个」三按钮始终在中间可用的约束。
+  r2 = await req2('/study/PEPXiaoXue6_1?at=7');
+  const hAt7 = deComment(r2.text);
+  check(hAt7.includes('>上一个<'), '?at=7 mid-book load renders 上一个 button');
+  check(!hAt7.includes('完成本课'), '?at=7 not at last card, so no 完成本课');
+
+  // ?at=1 时 cards[0] 就是当前卡，没有「上一张」可回退 —— 按钮应隐藏
+  r2 = await req2('/study/PEPXiaoXue6_1?at=1');
+  const hAt1 = deComment(r2.text);
+  check(!hAt1.includes('>上一个<'), '?at=1 first card does NOT render 上一个 button');
+
+  // 续学（lastWordRank = 2）→ viewRank = 3，prependPrev 应让按钮也出来
+  r2 = await req2('/study/PEPXiaoXue6_1');
+  const hResume = deComment(r2.text);
+  check(hResume.includes('>上一个<'), 'resumed study page (mid-book) renders 上一个 button');
+
+  // 详情页的「返回」应当带 ?at=N
+  r2 = await req2('/study/PEPXiaoXue6_1?at=7');
+  const detailHrefMatch = r2.text.match(
+    /href="\/word\/PEPXiaoXue6_1\/([^"?]+)([^"]*)"/,
+  );
+  check(detailHrefMatch !== null, 'study page has a word detail link');
+  if (detailHrefMatch) {
+    const detailHref = `/word/PEPXiaoXue6_1/${detailHrefMatch[1]}${
+      detailHrefMatch[2] ?? ''
+    }`;
+    r2 = await req2(detailHref);
+    check(r2.status === 200, `GET ${detailHref} -> 200`, `got ${r2.status}`);
+    // 详情页的「返回」href 应指向 /study/PEPXiaoXue6_1?at=7
+    check(
+      r2.text.includes('href="/study/PEPXiaoXue6_1?at=7"'),
+      'detail page back link = /study/...?at=7 (preserves position)',
+    );
+  }
 }
 
 /**

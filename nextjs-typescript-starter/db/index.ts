@@ -45,7 +45,7 @@ function getDb(): DrizzleDb {
   const client =
     globalForDb.__danciPg ??
     postgres(connectionString, {
-      // PgBouncer 事务模式必需
+      // PgBouncer / Supavisor 事务模式必需
       prepare: false,
       // dev + serverless 兼容：dev 并发少，serverless 多了会快速 fail-fast。
       // 2 太紧、跟浏览器 long-poll 撞就 Connection closed。
@@ -60,13 +60,33 @@ function getDb(): DrizzleDb {
       connection: {
         connect_timeout: 10,
         keepAlive: true,
-        // 关键 —— 关掉驱动默认 statement_timeout。
-        // Neon / Supabase Pooler 强制 10s，长查询 / RSC 流式响应会被
-        // SIGTERM → Next dev 报 "Connection closed"。
-        // 业务层要限速请自己在 Service 里 `SET statement_timeout`。
+        // 客户端 driver 的 statement_timeout: 0 只是让 postgres-js 不发
+        // startup `SET statement_timeout = 0` —— Supavisor 事务模式**拒绝**
+        // 这种 session 级语句（事务模式下每个事务是独立会话），driver 的设
+        // 置会被丢弃，落到 Supabase 角色自带的默认值（`postgres` 角色 2min、
+        // `authenticator` 8s、`anon/authenticated` 更短）。
+        // 冷启动首请求超时的根因：Next dev 编译 + 建连 + middleware + SQL 累计
+        // 超过默认 10s。改后：
+        //   1) 在 Supabase SQL Editor 跑一次：
+        //        alter role postgres set statement_timeout = '60s';
+        //      （或用 session 模式端口 5432 直连，绕过 pooler）
+        //   2) 或单独把 `authenticator` 角色调长。
+        // 这里只让字段置 0、注释说清意图，实际生效靠上述 1)。
         statement_timeout: 0,
       },
       onnotice: () => {},
+      // 【修复】关掉 postgres-js 默认的 pipelining（max_pipeline: 100）。
+      // Supavisor 事务模式会在两次 pipeline 之间把后端连接换走，导致
+      // 「promise 卡死 / 收不到响应」「Connection closed」。这是已知上游
+      // 冲突，Supabase 文档对 postgres-js 的明确建议。
+      // 性能上无损失：dev 并发低，PgBouncer 自身已做连接多路复用。
+      // 不用 0：postgres-js 3.4.9 的 execute() 在 max_pipeline:0 时会
+      // 短路跳过 onexecute，导致 sql.begin() 抛 UNSAFE_TRANSACTION
+      // （https://github.com/porsager/postgres/issues/823 #1189 #1218），
+      // 1 已经能消除 Supavisor 副作用。
+      // ⚠️ postgres@3.4.x 的类型声明里没有这个字段（运行时支持，src/index.js:448
+      //    会解析），用 as any 兜一下，不引入类型噪音。
+      ...({ max_pipeline: 1 } as Record<string, number>),
     });
 
   const db = drizzle(client);
@@ -77,6 +97,24 @@ function getDb(): DrizzleDb {
   globalForDb.__danciDrizzle = db;
 
   return db;
+}
+
+/**
+ * 拿到 postgres-js 原始 `sql` 客户端。
+ *
+ * 仅供需要**显式事务**的仓储函数使用。postgres-js 在 `max > 1` 时会拦截
+ * 「连接池上的事务」（抛 `UNSAFE_TRANSACTION: Only use sql.begin,
+ * sql.reserved or max: 1`），因为 Drizzle 0.29 的 `db.transaction()`
+ * 与 postgres-js 的事务锁协议不完全兼容 —— 直接走 `sql.begin()` 才稳。
+ *
+ * 普通查询继续用 `db` 即可，只有「必须原子」的写才走 `sql`。
+ */
+export function getSql(): PostgresClient {
+  if (!globalForDb.__danciPg) {
+    // 触发 getDb() 里的懒初始化路径
+    getDb();
+  }
+  return globalForDb.__danciPg as PostgresClient;
 }
 
 /**
