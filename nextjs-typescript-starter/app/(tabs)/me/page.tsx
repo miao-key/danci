@@ -106,7 +106,20 @@ export default async function MePage() {
                     />
                   </div>
                   <p className="mt-1.5 text-xs text-slate-500">
-                    已学 {p.learnedCount} / {p.wordCount}
+                    {/* 与首页「最近学习」卡严格对齐：
+                        X = lastWordRank + 1（下一张要学的 = 学习页首张卡的 rank）。
+                        三处口径一致：首页「上次学到：第 N 个」、
+                        我的页「已学 N / M」中 N、学习页「第 N / M 个」。
+                        进度条（aria-valuenow）继续按 learnedCount 算，
+                        文字行 N 与 home / study 对得上。
+                        学完整本（lastWordRank >= wordCount）时跳过 +1，
+                        避免出现「已学 131 / 130」的溢出文案 —— 此时
+                        学习页会进 FinishedState，整本书已学完。 */}
+                    {p.lastWordRank !== null && p.lastWordRank >= p.wordCount
+                      ? <>已学完 {p.wordCount} / {p.wordCount}</>
+                      : <>已学 {p.lastWordRank !== null && p.lastWordRank > 0
+                          ? p.lastWordRank + 1
+                          : 0} / {p.wordCount}</>}
                   </p>
                 </li>
               );

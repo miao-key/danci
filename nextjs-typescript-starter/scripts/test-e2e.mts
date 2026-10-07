@@ -370,7 +370,7 @@ async function run(email: string, password: string) {
   check(r.status === 200, 'GET /me -> 200');
   const hm = deComment(r.text);
   check(hm.includes(email), 'me page shows email');
-  check(hm.includes('已学 3 / 130'), 'me page shows "learned 3 / 130"', 'look for 已学 3 / 130');
+  check(hm.includes('已学 4 / 130'), 'me page X = lastWordRank + 1 (sync with home 上次学到：第 4 个)', 'look for 已学 4 / 130');
   check(hm.includes('aria-valuenow="2"'), 'me page progress bar = 2%');
 
   /* ---------- 修复：touch 推进 lastWordRank + ?at= 精准定位 ---------- */
